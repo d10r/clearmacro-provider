@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.git
+.env
+.env.*
+ethereum-contracts
+foundry
+tmp
+*.log

@@ -1,0 +1,10 @@
+ethereum-contracts/
+foundry/
+
+.env
+.env.*
+!/.env.example
+config/registry.json
+dist/
+node_modules/
+coverage/

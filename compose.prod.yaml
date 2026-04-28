@@ -1,0 +1,43 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+      DATABASE_URL: postgres://${POSTGRES_USER:-clearmacro}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-clearmacro_provider}
+      REGISTRY_PATH: ${REGISTRY_PATH:-/app/config/registry.json}
+      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:?set RELAYER_PRIVATE_KEY}
+      RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
+      WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
+      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
+      DEFAULT_CONFIRMATIONS: ${DEFAULT_CONFIRMATIONS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config/registry.json:/app/config/registry.json:ro
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clearmacro_provider}
+      POSTGRES_USER: ${POSTGRES_USER:-clearmacro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clearmacro} -d ${POSTGRES_DB:-clearmacro_provider}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:
