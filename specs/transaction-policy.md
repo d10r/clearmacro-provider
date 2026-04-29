@@ -1,244 +1,169 @@
-# ClearMacro Provider Backend: Transaction Policy
+# ClearMacro Provider Backend: Relayer Policy
 
 ## Goal
 
-Define the concrete transaction submission, retry, replacement, dropped-detection, and finality rules for v1. This policy is intentionally conservative and simple. It can be made more sophisticated after production observations.
+Define how the ClearMacro Provider app uses OpenZeppelin Relayer for transaction execution and how relayer status is projected into ClearMacro request lifecycle state.
+
+The app does not implement nonce allocation, transaction signing, raw transaction rebroadcast, gas replacement loops, or dropped-transaction heuristics. Those responsibilities belong to OpenZeppelin Relayer.
 
 ## Core Model
 
-Transaction processing has two durable phases:
+Transaction processing has three persisted app phases:
 
-1. Submission: send a signed raw transaction with `eth_sendRawTransaction`. The RPC either rejects it immediately or accepts it and returns a transaction hash.
-2. Inclusion/finality: after acceptance, track the transaction by hash until receipt plus required confirmations, dropped/replaced/expired, or terminal provider failure.
+1. Acceptance: the app validates and stores a ClearMacro request.
+2. Relayer submission: the app submits transaction intent to OpenZeppelin Relayer and stores the returned relayer transaction ID.
+3. Reconciliation: the same worker polls OpenZeppelin Relayer status and projects it into ClearMacro lifecycle state.
 
-Never model this as one blocking operation in persisted state.
+Never model relay as one blocking operation. `POST /v1/relay` returns after acceptance and persistence, not after transaction submission or confirmation.
 
 ## Chain Policy
 
-Each chain has policy from registry plus defaults.
+Each chain has policy from the registry plus defaults.
 
 Registry fields:
 
-- `confirmations`: required confirmation count for finalization.
-- `rpcs`: ordered list of named RPC endpoints, each with `name` and `url`.
+- `confirmations`: required confirmation count for finalization. This should match or be no stricter than the OpenZeppelin Relayer network config for the same chain.
+- `rpcs`: named app RPC endpoints for validation and preflight.
+- `ozRelayerId`: OpenZeppelin Relayer ID used for execution on that chain.
 
-Default policy:
+Default app policy:
 
 - `confirmations`: env `DEFAULT_CONFIRMATIONS`, default `1`.
-- `workerPollIntervalMs`: `1000`.
-- `receiptPollIntervalMs`: `3000`.
-- `rpcRequestTimeoutMs`: `10000`.
-- `sendRetryCount`: `3`.
-- `sendRetryBaseDelayMs`: `1000`.
-- `pendingStuckAfterMs`: `120000`.
-- `maxReplacementAttempts`: `5`.
-- `droppedCheckMinAgeMs`: `300000`.
-- `droppedUnknownChecks`: `3` full checks across all configured RPC endpoints.
-- `gasLimitMultiplierBps`: `12000` (120%).
-- `feeBumpBps`: `1250` (12.5%).
-- `minPriorityFeeWei`: `1000000` for chains that return zero/very low priority fees.
+- `relayerWorkerPollIntervalMs`: env `RELAYER_WORKER_POLL_INTERVAL_MS`, default `2000`.
+- `relayerRequestTimeoutMs`: env `RELAYER_REQUEST_TIMEOUT_MS`, default `10000`.
+- `submitRetryCount`: `3`.
+- `submitRetryBaseDelayMs`: `1000`.
+- `gasLimitMultiplierBps`: `12000` for optional app-side gas limit override. Prefer OpenZeppelin Relayer estimation unless a concrete issue requires an override.
 
 Expose these as code constants first. Make them configurable later only if needed.
 
+## OpenZeppelin Relayer Requirements
+
+- Use OpenZeppelin Relayer with Redis repository storage.
+- Set `REPOSITORY_STORAGE_TYPE=redis`.
+- Set `RESET_STORAGE_ON_START=false`.
+- Keep `STORAGE_ENCRYPTION_KEY` stable across restarts.
+- Enable metrics on the relayer.
+- Configure relayers and networks file-first.
+- Configure at least one healthy RPC per enabled chain in OpenZeppelin Relayer network config.
+- Keep the relayer signer exclusively owned by OpenZeppelin Relayer for this application.
+- Ensure the relayer signer has native gas token on each enabled chain before accepting work.
+
 ## Nonce Policy
 
-The relayer account is exclusively owned by this application.
+The ClearMacro Provider app never allocates or reserves EVM nonces.
 
 Rules:
 
-- On first startup for a chain, initialize `chain_cursors.next_nonce` from `eth_getTransactionCount(relayer, "pending")`.
-- Reserve nonces transactionally in Postgres by incrementing `chain_cursors.next_nonce`.
-- Multiple requests may reserve different nonces and be pending at the same time.
-- Never reuse a nonce if a raw signed transaction was persisted for that nonce, unless creating a replacement for the same request/attempt lineage.
-- If the database has a cursor for a chain, do not reset it from RPC automatically on restart.
-- If RPC pending nonce is greater than local cursor, alert and advance local cursor only through an explicit recovery path. This should not happen under the exclusive-account assumption.
-- If RPC pending nonce is lower than local cursor, continue using local cursor; earlier transactions may still be pending or not visible to that RPC.
+- Do not store local nonce cursors.
+- Do not call `eth_getTransactionCount` for execution nonce decisions.
+- Do not sign transactions in the app.
+- Do not submit transactions from the relayer account outside OpenZeppelin Relayer.
+- Store nonce values only as observed relayer status fields for audit/debugging.
 
-## Gas And Fee Policy
+## Transaction Construction Policy
 
-### Gas Limit
+For `clearMacroV1`, the app submits this transaction intent to OpenZeppelin Relayer:
 
-For each new attempt:
+- `relayerId`: `chains[].ozRelayerId` from registry.
+- `to`: configured `ClearMacroForwarderV1` address.
+- `value`: `msgValue` from request, default `0`.
+- `data`: ABI encoding of `ClearMacroForwarderV1.runMacro(macro, params, signer, signature)`.
 
-- Estimate gas with the selected RPC.
-- If estimation fails with deterministic revert-like error, transition request to `preflight_failed`.
-- If estimation fails due to transient RPC failure, retry another RPC if available.
-- Set gas limit to `estimate * gasLimitMultiplierBps / 10000`, rounded up.
+For `permit2ClearMacroV1`, keep schemas but reject until implemented.
 
-### EIP-1559 Fees
+## Preflight Policy
 
-Use EIP-1559 where supported by the chain/RPC.
+Preflight should reduce avoidable failed transactions but must not become an overcomplicated simulator.
 
-Initial fee:
+For v1:
 
-- Use `estimateFeesPerGas`/fee history equivalent from viem.
-- Ensure `maxPriorityFeePerGas >= minPriorityFeeWei` when the chain reports zero or implausibly low tip.
-- Ensure `maxFeePerGas >= baseFee * 2 + maxPriorityFeePerGas` if base fee is available.
+- Use app registry RPCs and viem simulation for the exact forwarder call when practical.
+- Run preflight before OpenZeppelin Relayer submission if it can be done without materially increasing latency.
+- If preflight returns a deterministic revert, transition to `preflight_failed`.
+- If preflight fails due to RPC/network problems, retry another app RPC if available. If no app RPC is healthy, return `503 CHAIN_UNAVAILABLE` before accepting the request.
+- Preflight success is not a guarantee. The real transaction may still revert and should then become `reverted` based on relayer status.
 
-Replacement fee:
+## App RPC Selection Policy
 
-- New `maxFeePerGas` must be at least previous `maxFeePerGas * (1 + feeBumpBps / 10000)`.
-- New `maxPriorityFeePerGas` must be at least previous `maxPriorityFeePerGas * (1 + feeBumpBps / 10000)`.
-- Also respect current network fee estimates if they are higher.
-
-### Legacy Gas Price
-
-For chains/RPCs that require legacy transactions:
-
-- Use `getGasPrice`.
-- Replacement gas price must be at least previous `gasPrice * (1 + feeBumpBps / 10000)`.
-
-### Insufficient Funds
-
-If the relayer account lacks native token for gas:
-
-- Do not keep retrying aggressively.
-- Transition affected request to `failed` with error code `RELAYER_INSUFFICIENT_FUNDS`.
-- Emit an alert-worthy metric/log.
-
-## RPC Selection Policy
-
-For each chain, use the ordered `rpcs` list from registry.
+The app uses registry `rpcs` only for validation and preflight. OpenZeppelin Relayer uses its own configured RPCs for execution.
 
 Rules:
 
-- Try the first healthy RPC by default.
-- On timeout/network/5xx/malformed response, try the next RPC.
-- Keep lightweight in-memory health status per RPC.
-- A single RPC failure must not make the request terminal if another RPC is available.
-- Persist the RPC `name` used for each send/receipt event. Do not persist full RPC URLs, because they may contain API keys.
+- Try the first healthy app RPC by default.
+- On timeout/network/5xx/malformed response, try the next app RPC.
+- Keep lightweight in-memory health status per app RPC.
+- A single app RPC failure must not reject the request if another app RPC is available.
+- Use RPC `name` in logs, metrics, and audit events. Do not persist full RPC URLs because they may contain API keys.
 
-## Send Error Classification
+## Relayer Submission Policy
 
-Classify `eth_sendRawTransaction` errors into these categories.
+When a request is accepted:
 
-### Accepted Equivalents
+- Persist it as `accepted` and return `202` from the API.
+- The relayer worker claims a batch of `accepted`/`queued` non-terminal requests without `oz_transaction_id`.
+- The worker transitions claimed requests to `queued` and submits each transaction intent to OpenZeppelin Relayer.
+- Persist the returned OpenZeppelin transaction ID immediately.
+- Transition the request to `pending` once OpenZeppelin Relayer accepts the transaction intent.
+- Append a `relayer_submit_accepted` audit event with relayer id and transaction id.
 
-Treat as accepted/pending if the error indicates the exact same transaction is already known.
+Submission HTTP failures:
 
-Examples:
+- Retry transient network/5xx/429 errors up to `submitRetryCount`.
+- Treat 4xx validation errors from OpenZeppelin Relayer as `submit_failed`, unless the error indicates relayer unavailability and retry is appropriate.
+- If OpenZeppelin Relayer is unreachable after retries, transition to `submit_failed` and alert.
+- Do not attempt local raw transaction fallback.
 
-- `already known`
-- `already imported`
-- provider-specific equivalent where tx hash can be derived from raw tx
+The v1 worker may use simple SQLite transactions for claiming work. Do not add a separate queue service.
 
-Action:
+## Lifecycle Projection Policy
 
-- Persist tx hash.
-- Set attempt/request to `pending`.
+The relayer worker polls OpenZeppelin Relayer by transaction ID for non-terminal requests.
 
-### Retryable Transient Errors
+Mapping:
 
-Examples:
+| OpenZeppelin Relayer status | ClearMacro request state | Notes |
+| --- | --- | --- |
+| `pending` | `pending` | Intent accepted but not yet sent. |
+| `sent` | `pending` | Transaction in progress. |
+| `submitted` | `pending` | Hash/nonce may be available. |
+| `mined` | `confirmed` | If exposed before `confirmed`, treat as successful terminal for v1 unless more confirmations are required externally. |
+| `confirmed` | `confirmed` | Successful terminal state. |
+| `failed` with revert-like reason | `reverted` | Match reasons containing `revert`, `reverted`, `receipt status: failed`, or equivalent. |
+| `failed` without revert signal | `failed` | Terminal infrastructure or submission failure. |
+| `canceled` | `canceled` | Operator or relayer cancellation. |
+| `expired` | `expired` | Relayer or app expiry. |
 
-- network timeout
-- connection refused/reset
-- HTTP 429/5xx
-- malformed JSON-RPC response
-- temporary backend unavailable
+On each poll:
 
-Action:
-
-- Retry up to `sendRetryCount` across available RPCs with exponential backoff.
-- If exhausted before any tx hash is accepted, transition request to `submit_failed`.
-
-### Replaceable Fee Errors
-
-Examples:
-
-- `replacement transaction underpriced`
-- `fee too low`
-- `max fee per gas less than block base fee`
-- `transaction underpriced`
-
-Action:
-
-- If this is first submission before tx acceptance, rebuild/sign with bumped/current fees and retry.
-- If replacing an already pending attempt, create a replacement attempt with same nonce.
-- Respect `maxReplacementAttempts`.
-
-### Nonce Errors
-
-Examples:
-
-- `nonce too low`
-- `already known` with same hash
-- `nonce too high`
-
-Action:
-
-- `already known`: accepted equivalent.
-- `nonce too low`: query transaction/receipt for known attempts with that nonce. If a prior attempt confirmed, finalize accordingly. If no known attempt exists, transition to `failed` and alert because exclusive nonce ownership invariant was violated.
-- `nonce too high`: retry other RPCs. If all agree, keep request queued/pending and alert on nonce gap; do not skip or reuse nonces automatically.
-
-### Deterministic Transaction Rejection
-
-Examples:
-
-- malformed raw transaction
-- invalid chain id
-- intrinsic gas too low after rebuild attempts
-- sender has insufficient funds
-
-Action:
-
-- If caused by provider construction/signing bug, transition to `failed`.
-- If caused by relayer balance, transition to `failed` with `RELAYER_INSUFFICIENT_FUNDS`.
-- If caused by request data and preflight missed it, transition to `submit_failed` or `preflight_failed` depending on whether an RPC accepted any transaction.
-
-## Pending Tracking Policy
-
-Once a tx hash is accepted:
-
-- Request state becomes `pending`.
-- Poll `eth_getTransactionReceipt` every `receiptPollIntervalMs`.
-- If receipt is present, persist it and track confirmation depth.
-- Finalize only after `confirmations` blocks are reached.
-- If receipt status is success, request state becomes `confirmed`.
-- If receipt status is failure, request state becomes `reverted`.
-
-Confirmation depth:
-
-- If receipt block number is `B` and current head is `H`, depth is `H - B + 1`.
-- If chain reorg causes the receipt to disappear before finalization, return to `pending` and continue tracking.
-- After finalization, do not reverse terminal state in v1. Use conservative confirmation counts in registry for chains where this matters.
-
-## Rebroadcast Policy
-
-If an accepted transaction has no receipt:
-
-- Query `eth_getTransactionByHash`.
-- If known by any configured RPC, keep `pending`.
-- If unknown on the current RPC but not old enough for dropped checks, rebroadcast the exact same raw tx.
-- Rebroadcasting the same raw tx must not create a new attempt.
-- Persist a `rebroadcasted` audit event.
+- Upsert `relayer_transactions` with the latest relayer status and raw JSON snapshot.
+- Update `relay_requests.current_tx_hash` when relayer hash changes.
+- Append an audit event only when meaningful fields changed or the request reaches a terminal state.
 
 ## Replacement Policy
 
-If a pending transaction has no receipt and is older than `pendingStuckAfterMs`:
+Manual replacement is an operator workflow, not part of normal public request handling.
 
-- Create a replacement attempt with the same nonce and same transaction semantics.
-- Bump fees according to gas policy.
-- Sign and send replacement raw tx.
-- Mark previous attempt `replaced` only after replacement is accepted by an RPC.
-- Request remains `pending` and current tx hash changes to the replacement tx hash.
-- Stop after `maxReplacementAttempts`; then rely on dropped detection or eventual receipt.
+Rules:
 
-Do not create a replacement if `validBefore` is close enough that inclusion would likely happen after expiry. In that case, transition to `expired` only if no accepted transaction can still validly execute under policy.
+- Only attempt replacement after the OpenZeppelin transaction is `submitted` and exposes nonce/hash/fee fields.
+- Prefer explicit fee replacement over speed-only replacement.
+- For legacy fee replacement, set a numeric JSON `gas_price` greater than the observed previous gas price by at least 10%.
+- For EIP-1559 replacement, set numeric JSON `max_fee_per_gas` and `max_priority_fee_per_gas` greater than observed previous values by at least 10% and high enough for current network conditions.
+- If replacement succeeds, OpenZeppelin Relayer may keep the same transaction ID and update the hash. The app must preserve the new hash and append an audit event.
+- If replacement fails with a price-bump calculation error, retry with explicit fee fields or cancel if operator policy allows.
 
-## Dropped Detection Policy
+Do not submit an app-created replacement after `validBefore` has elapsed. If a relayer transaction was already accepted before expiry, continue reconciling it.
 
-Dropping is conservative because RPC nodes can disagree.
+## Cancel Policy
 
-A pending attempt may be marked `dropped` only if:
+Manual cancel is an operator workflow.
 
-- It is older than `droppedCheckMinAgeMs`.
-- No receipt exists on any configured RPC.
-- `eth_getTransactionByHash` returns unknown on all configured RPCs.
-- The above full check has happened `droppedUnknownChecks` times separated by at least `receiptPollIntervalMs`.
-- Replacement policy is exhausted or not applicable.
+Rules:
 
-When the final active attempt is dropped and no replacement remains, request state becomes `dropped`.
+- Cancel through OpenZeppelin Relayer only.
+- If cancel succeeds, project the request to `canceled`. If later evidence contradicts a terminal state, append an audit event and alert; do not automatically rewrite history in v1.
+- App APIs should not expose cancel publicly in v1 unless an explicit authenticated operator API is added.
 
 ## Expiry Policy
 
@@ -248,35 +173,29 @@ Rules:
 
 - If `validBefore != 0` and already elapsed before request acceptance, reject synchronously with `CLEAR_MACRO_EXPIRED`.
 - If `validAfter` is in the future, keep request `queued` until it becomes valid if delayed execution is enabled; otherwise reject synchronously with `CLEAR_MACRO_NOT_YET_VALID`.
-- Before signing/sending, re-check `validBefore`.
-- Do not submit a new transaction or replacement after `validBefore` elapsed.
-- If a transaction was already accepted before `validBefore`, continue tracking it. If it reverts due to expiry, finalize as `reverted`.
-
-## Preflight Policy
-
-Preflight should reduce avoidable failed transactions but must not become an overcomplicated simulator.
-
-For v1:
-
-- Use `eth_call`/viem simulation for the exact forwarder call when practical.
-- Run preflight before nonce reservation if possible.
-- If preflight returns a deterministic revert, transition to `preflight_failed`.
-- If preflight fails due to RPC/network problems, do not terminally fail immediately; retry another RPC or continue to queued if policy allows.
-- Preflight success is not a guarantee. The real transaction may still revert.
+- Before submitting to OpenZeppelin Relayer, re-check `validBefore`.
+- Do not submit a new relayer transaction after `validBefore` elapsed.
+- If a transaction was already accepted by OpenZeppelin Relayer before `validBefore`, continue tracking it. If it reverts due to expiry, finalize as `reverted`.
 
 ## Startup Recovery Policy
 
-On startup:
+On app startup:
 
-- Load all non-terminal requests.
-- Load active attempts and nonce reservations.
-- For `accepted` or `queued` requests without attempts, enqueue them.
-- For `pending` requests with active attempts, resume receipt polling and dropped/replacement checks.
-- For attempts with persisted raw tx but no accepted tx hash, retry submission unless request expired.
-- Do not allocate new nonces until `chain_cursors` have been loaded and checked.
+- Open SQLite and run migrations if enabled.
+- Load non-terminal requests.
+- For requests without an OpenZeppelin transaction ID and still valid, let the relayer worker submit them.
+- For requests with an OpenZeppelin transaction ID, resume polling.
+- Do not attempt to reconstruct OpenZeppelin Relayer internal state in the app.
+
+On OpenZeppelin Relayer restart:
+
+- Redis repository storage must preserve transaction IDs and status.
+- App reconciliation should continue polling the same transaction IDs.
+- If a known transaction ID becomes permanently unqueryable, mark affected requests `failed` with `RELAYER_TRANSACTION_NOT_FOUND` and alert.
 
 ## Library Guidance
 
-Use viem for RPC, ABI encoding, signing utilities, fee estimation, transaction serialization, and receipt polling primitives.
-
-Do not use a library abstraction that hides submission and confirmation as one opaque blocking operation in the durable transaction manager. If a helper like `waitForTransactionReceipt` is used internally, the code must still persist accepted tx hash, receipt observation, confirmation depth, and terminal state separately.
+- Use viem for ABI encoding, signature utilities, app RPC calls, and simulation.
+- Use native `fetch` for OpenZeppelin Relayer HTTP calls unless a typed SDK becomes clearly beneficial.
+- Use `node:sqlite` for SQLite access; keep SQL explicit and small.
+- Do not add a queue system unless SQLite + the relayer worker loop becomes insufficient under measured load.

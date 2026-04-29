@@ -1,0 +1,52 @@
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint:
+      - anvil
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "31337"
+      - --block-time
+      - "2"
+    ports:
+      - "8545:8545"
+
+  redis:
+    image: redis:7-bookworm
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+
+  relayer:
+    image: openzeppelin/openzeppelin-relayer:v1.4.0
+    # Fallback when image is unavailable:
+    # build:
+    #   context: ../../openzeppelin-relayer
+    #   dockerfile: Dockerfile.production
+    depends_on:
+      - redis
+      - anvil
+    environment:
+      APP_PORT: 8080
+      METRICS_PORT: 8081
+      METRICS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      REPOSITORY_STORAGE_TYPE: redis
+      RESET_STORAGE_ON_START: "false"
+      STORAGE_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      API_KEY: oz-spike-key-32-char-minimum-abcdef
+      WEBHOOK_SIGNING_KEY: spike-webhook-signing-key
+      KEYSTORE_PASSPHRASE: test
+      LOG_LEVEL: info
+      IN_DOCKER: "true"
+      RPC_BLOCK_PRIVATE_IPS: "false"
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      - ./config:/app/config:ro

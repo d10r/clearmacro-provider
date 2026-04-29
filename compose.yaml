@@ -1,20 +1,55 @@
 services:
-  postgres:
-    image: postgres:16-alpine
+  redis:
+    image: redis:7-bookworm
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-clearmacro_provider}
-      POSTGRES_USER: ${POSTGRES_USER:-clearmacro}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clearmacro}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clearmacro} -d ${POSTGRES_DB:-clearmacro_provider}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      - oz-redis-data:/data
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint:
+      - anvil
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "31337"
+      - --block-time
+      - "2"
+    ports:
+      - "${ANVIL_PORT:-8545}:8545"
+
+  oz-relayer:
+    image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - anvil
+    environment:
+      APP_PORT: 8080
+      METRICS_PORT: 8081
+      METRICS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      REPOSITORY_STORAGE_TYPE: redis
+      RESET_STORAGE_ON_START: "false"
+      STORAGE_ENCRYPTION_KEY: ${OZ_STORAGE_ENCRYPTION_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      API_KEY: ${OZ_RELAYER_API_KEY:-local-oz-relayer-api-key-32chars}
+      WEBHOOK_SIGNING_KEY: ${OZ_WEBHOOK_SIGNING_KEY:-local-webhook-signing-key}
+      KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:-change-me}
+      LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
+      IN_DOCKER: "true"
+      RPC_BLOCK_PRIVATE_IPS: "false"
+    ports:
+      - "${OZ_RELAYER_PORT:-8080}:8080"
+      - "${OZ_RELAYER_METRICS_PORT:-8081}:8081"
+    volumes:
+      - ./config/oz-relayer:/app/config:ro
 
 volumes:
-  postgres-data:
+  oz-redis-data:

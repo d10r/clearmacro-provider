@@ -1,0 +1,283 @@
+{
+  "threshold": "pass >= 95% successful submissions with one dead endpoint",
+  "deadFirst": {
+    "trialName": "dead-first",
+    "rpcUrls": [
+      "http://127.0.0.1:59999",
+      "http://anvil:8545"
+    ],
+    "patchResult": {
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "id": "evm:localhost-anvil",
+          "name": "localhost-anvil",
+          "network_type": "evm",
+          "rpc_urls": [
+            {
+              "url": "http://127.0.0.1:59999",
+              "weight": 100
+            },
+            {
+              "url": "http://anvil:8545",
+              "weight": 50
+            }
+          ],
+          "average_blocktime_ms": 2000,
+          "is_testnet": true,
+          "chain_id": 31337,
+          "required_confirmations": 1,
+          "symbol": "ETH"
+        },
+        "error": null
+      },
+      "data": {
+        "id": "evm:localhost-anvil",
+        "name": "localhost-anvil",
+        "network_type": "evm",
+        "rpc_urls": [
+          {
+            "url": "http://127.0.0.1:59999",
+            "weight": 100
+          },
+          {
+            "url": "http://anvil:8545",
+            "weight": 50
+          }
+        ],
+        "average_blocktime_ms": 2000,
+        "is_testnet": true,
+        "chain_id": 31337,
+        "required_confirmations": 1,
+        "symbol": "ETH"
+      }
+    },
+    "runs": 20,
+    "successCount": 20,
+    "successRate": 1,
+    "passes_threshold": true,
+    "submissions": [
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      }
+    ]
+  },
+  "validFirst": {
+    "trialName": "valid-first",
+    "rpcUrls": [
+      "http://anvil:8545",
+      "http://127.0.0.1:59999"
+    ],
+    "patchResult": {
+      "status": 200,
+      "body": {
+        "success": true,
+        "data": {
+          "id": "evm:localhost-anvil",
+          "name": "localhost-anvil",
+          "network_type": "evm",
+          "rpc_urls": [
+            {
+              "url": "http://anvil:8545",
+              "weight": 100
+            },
+            {
+              "url": "http://127.0.0.1:59999",
+              "weight": 50
+            }
+          ],
+          "average_blocktime_ms": 2000,
+          "is_testnet": true,
+          "chain_id": 31337,
+          "required_confirmations": 1,
+          "symbol": "ETH"
+        },
+        "error": null
+      },
+      "data": {
+        "id": "evm:localhost-anvil",
+        "name": "localhost-anvil",
+        "network_type": "evm",
+        "rpc_urls": [
+          {
+            "url": "http://anvil:8545",
+            "weight": 100
+          },
+          {
+            "url": "http://127.0.0.1:59999",
+            "weight": 50
+          }
+        ],
+        "average_blocktime_ms": 2000,
+        "is_testnet": true,
+        "chain_id": 31337,
+        "required_confirmations": 1,
+        "symbol": "ETH"
+      }
+    },
+    "runs": 20,
+    "successCount": 20,
+    "successRate": 1,
+    "passes_threshold": true,
+    "submissions": [
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      },
+      {
+        "ok": true,
+        "status": "pending"
+      }
+    ]
+  }
+}

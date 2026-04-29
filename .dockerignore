@@ -6,5 +6,7 @@ coverage
 .env.*
 ethereum-contracts
 foundry
+openzeppelin-relayer
+data
 tmp
 *.log

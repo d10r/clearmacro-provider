@@ -5,6 +5,7 @@
       "chainId": 8453,
       "name": "base-mainnet",
       "enabled": false,
+      "ozRelayerId": "base-mainnet-relayer",
       "rpcs": [
         {
           "name": "example",

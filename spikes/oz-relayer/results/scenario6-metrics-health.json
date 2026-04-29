@@ -1,0 +1,80 @@
+{
+  "health": {
+    "status": 200,
+    "body": {
+      "raw": "OK"
+    }
+  },
+  "readiness": {
+    "status": 200,
+    "body": {
+      "ready": true,
+      "status": "healthy",
+      "components": {
+        "system": {
+          "status": "healthy",
+          "fd_count": 98,
+          "fd_limit": 1048576,
+          "fd_usage_percent": 0,
+          "close_wait_count": 0
+        },
+        "redis": {
+          "status": "healthy",
+          "primary_pool": {
+            "connected": true,
+            "available": 0,
+            "max_size": 0
+          },
+          "reader_pool": {
+            "connected": true,
+            "available": 0,
+            "max_size": 0
+          }
+        },
+        "queue": {
+          "status": "healthy"
+        }
+      },
+      "timestamp": "2026-04-28T17:18:48.884159199+00:00"
+    }
+  },
+  "relayer": {
+    "status": 200,
+    "body": {
+      "success": true,
+      "data": {
+        "id": "anvil-relayer",
+        "name": "Anvil Spike Relayer",
+        "network": "localhost-anvil",
+        "network_type": "evm",
+        "paused": false,
+        "policies": {
+          "min_balance": 0,
+          "gas_limit_estimation": true
+        },
+        "signer_id": "anvil-signer",
+        "address": "0xa9f9add7e644c15ea3596f8653c69d66ff708dc7",
+        "system_disabled": false
+      },
+      "error": null
+    },
+    "data": {
+      "id": "anvil-relayer",
+      "name": "Anvil Spike Relayer",
+      "network": "localhost-anvil",
+      "network_type": "evm",
+      "paused": false,
+      "policies": {
+        "min_balance": 0,
+        "gas_limit_estimation": true
+      },
+      "signer_id": "anvil-signer",
+      "address": "0xa9f9add7e644c15ea3596f8653c69d66ff708dc7",
+      "system_disabled": false
+    }
+  },
+  "metricsStatus": 200,
+  "metricSample": [
+    "[\"in_flight_requests\",\"raw_requests_total\",\"request_latency_seconds\",\"requests_total\",\"rpc_call_latency_seconds\"]"
+  ]
+}

@@ -8,36 +8,56 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: ${PORT:-3000}
-      DATABASE_URL: postgres://${POSTGRES_USER:-clearmacro}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-clearmacro_provider}
+      DATABASE_PATH: ${DATABASE_PATH:-/data/clearmacro-provider.sqlite}
       REGISTRY_PATH: ${REGISTRY_PATH:-/app/config/registry.json}
-      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:?set RELAYER_PRIVATE_KEY}
+      OZ_RELAYER_URL: ${OZ_RELAYER_URL:-http://oz-relayer:8080}
+      OZ_RELAYER_API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
       RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
-      WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
+      RELAYER_WORKER_ENABLED: ${RELAYER_WORKER_ENABLED:-true}
+      RELAYER_WORKER_POLL_INTERVAL_MS: ${RELAYER_WORKER_POLL_INTERVAL_MS:-2000}
       API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
       DEFAULT_CONFIRMATIONS: ${DEFAULT_CONFIRMATIONS:-1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${PORT:-3000}:3000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      oz-relayer:
+        condition: service_started
     volumes:
       - ./config/registry.json:/app/config/registry.json:ro
+      - app-data:/data
 
-  postgres:
-    image: postgres:16-alpine
+  redis:
+    image: redis:7-bookworm
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-clearmacro_provider}
-      POSTGRES_USER: ${POSTGRES_USER:-clearmacro}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clearmacro} -d ${POSTGRES_DB:-clearmacro_provider}"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+      - oz-redis-data:/data
+
+  oz-relayer:
+    image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      APP_PORT: 8080
+      METRICS_PORT: 8081
+      METRICS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      REPOSITORY_STORAGE_TYPE: ${OZ_REPOSITORY_STORAGE_TYPE:-redis}
+      RESET_STORAGE_ON_START: ${OZ_RESET_STORAGE_ON_START:-false}
+      STORAGE_ENCRYPTION_KEY: ${OZ_STORAGE_ENCRYPTION_KEY:?set OZ_STORAGE_ENCRYPTION_KEY}
+      API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
+      WEBHOOK_SIGNING_KEY: ${OZ_WEBHOOK_SIGNING_KEY:?set OZ_WEBHOOK_SIGNING_KEY}
+      KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:?set OZ_KEYSTORE_PASSPHRASE}
+      LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
+      IN_DOCKER: "true"
+    volumes:
+      - ./config/oz-relayer:/app/config:ro
 
 volumes:
-  postgres-data:
+  app-data:
+  oz-redis-data:
