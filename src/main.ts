@@ -6,7 +6,7 @@ import { AuditEventRepository, RelayRequestRepository, RelayerTransactionReposit
 import { OzRelayerClient } from "./relayer/client.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { createApp } from "./app.js";
-import { evaluateChainReadiness, getForwarderDigest } from "./chain/readiness.js";
+import { evaluateChainReadiness, getForwarderDigest, validateRelaySignature } from "./chain/readiness.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -38,6 +38,14 @@ async function main(): Promise<void> {
         forwarder: input.forwarder,
         macro: input.macro,
         params: input.params,
+      }),
+    validateRelaySignature: (input) =>
+      validateRelaySignature({
+        registry,
+        chainId: input.chainId,
+        signer: input.signer,
+        digest: input.digest,
+        signature: input.signature,
       }),
   });
 

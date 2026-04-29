@@ -15,8 +15,9 @@ export type AppDeps = {
   requestMaxMetadataKeys: number;
   requestMaxMetadataValueLength: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }>;
+  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }>;
   getForwarderDigest: (input: { chainId: number; forwarder: string; macro: string; params: string }) => Promise<string>;
+  validateRelaySignature: (input: { chainId: number; signer: string; digest: string; signature: string }) => Promise<boolean>;
 };
 
 export async function createApp(deps: AppDeps) {
@@ -45,6 +46,7 @@ export async function createApp(deps: AppDeps) {
     requestMaxMetadataValueLength: deps.requestMaxMetadataValueLength,
     getChainReadiness: deps.getChainReadiness,
     getForwarderDigest: deps.getForwarderDigest,
+    validateRelaySignature: deps.validateRelaySignature,
   });
 
   return { app, metrics };

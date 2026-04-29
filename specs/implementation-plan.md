@@ -515,7 +515,7 @@ Confirmation precedence:
 3. `DEFAULT_CONFIRMATIONS` is only a default used when loading registry entries that omit `confirmations`; explicit registry values win.
 4. `relay_requests.required_confirmations` stores the effective registry value used for that request for audit/display.
 
-If registry confirmations and OZ network confirmations differ for an enabled chain, `/readyz` must fail and new requests for that chain must be rejected with `PROVIDER_NOT_READY` until config is fixed.
+If registry confirmations and OZ network confirmations differ for an enabled chain, `/readyz` must fail and new requests for that chain must be rejected with `PROVIDER_NOT_READY` until config is fixed. Implement this by reading the relayer's `network` and `network_type` from `GET /api/v1/relayers/{ozRelayerId}`, then reading `required_confirmations` from `GET /api/v1/networks/{network_type}:{network}`.
 
 ## Idempotency Namespace
 
@@ -549,6 +549,7 @@ Request acceptance is per-chain:
 - The app must check relayer readiness before accepting work for enabled chains.
 - The app must fetch each enabled relayer's signer address from `GET /api/v1/relayers/{ozRelayerId}` and check native-token balance with the registry app RPCs.
 - A chain is ready only when signer balance is greater than zero. Add a configurable minimum later only if operations require it.
+- v1 supports one running app instance with one relayer worker. Do not run multiple app containers or multiple worker processes against the same SQLite database unless atomic distributed claiming is implemented later.
 
 ## Replacement And Cancel Policy
 

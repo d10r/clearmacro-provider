@@ -17,3 +17,8 @@ coverage/
 *.sqlite-wal
 pnpm-debug.log*
 .pnpm-store/
+
+cache/
+out/
+
+.cursor/

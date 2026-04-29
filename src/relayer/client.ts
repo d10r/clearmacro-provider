@@ -28,6 +28,16 @@ export type RelayerDetails = {
   address: string;
   paused: boolean;
   system_disabled: boolean;
+  network?: string | null;
+  network_type?: string | null;
+};
+
+export type OzNetwork = {
+  id: string;
+  network?: string;
+  name?: string;
+  network_type: string;
+  required_confirmations: number;
 };
 
 export class OzRelayerClient {
@@ -72,6 +82,14 @@ export class OzRelayerClient {
     return envelope.data;
   }
 
+  async getNetwork(networkType: string, network: string): Promise<OzNetwork> {
+    const envelope = await this.call<OzEnvelope<OzNetwork>>(`/api/v1/networks/${networkType}:${network}`, { method: "GET" });
+    if (!envelope.success || !envelope.data) {
+      throw new Error(`Relayer network unavailable: ${envelope.error ?? "unknown error"}`);
+    }
+    return envelope.data;
+  }
+
   async submitTransaction(
     ozRelayerId: string,
     payload: { to: string; value: string; data: string; speed: "fast" },
@@ -97,4 +115,3 @@ export class OzRelayerClient {
     return envelope.data;
   }
 }
-

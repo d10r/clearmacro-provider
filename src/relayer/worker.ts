@@ -20,6 +20,7 @@ export type RelayerWorkerDeps = {
     macro: string;
     params: string;
     signer: string;
+    relayerSigner: string;
     signature: string;
     msgValue: string;
   }) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
@@ -68,12 +69,14 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         continue;
       }
       const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
+      const relayer = await deps.relayerClient.getRelayer(request.ozRelayerId);
       const preflight = await preflightFn({
         chain,
         forwarder: request.forwarder,
         macro: request.macro,
         params: request.params,
         signer: request.signer,
+        relayerSigner: relayer.address,
         signature: request.signature ?? "0x",
         msgValue: request.msgValue,
       });

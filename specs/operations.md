@@ -68,6 +68,8 @@ Production requirements:
 
 The production Compose stack is intentionally self-contained for this service: app, OpenZeppelin Relayer, and Redis. Do not expect an external database service.
 
+Run exactly one `app` container in v1. SQLite is the app state store and the relayer worker is designed for one active app process. Do not horizontally scale the app or run multiple worker processes against the same SQLite database until an explicit distributed claiming mechanism is added.
+
 ## Data And Backups
 
 Persistent volumes:

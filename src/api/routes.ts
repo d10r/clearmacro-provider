@@ -6,7 +6,6 @@ import type { LoadedRegistry } from "../config/registry.js";
 import { decodeClearMacroPayload } from "../validation/clearmacro.js";
 import { validateRegistryPolicy } from "../validation/registry.js";
 import type { RelayRequestRepository, AuditEventRepository, RelayerTransactionRepository } from "../db/repositories.js";
-import { validateEoaSignature } from "../validation/clearmacro.js";
 
 type RegisterRoutesDeps = {
   registry: LoadedRegistry;
@@ -16,8 +15,9 @@ type RegisterRoutesDeps = {
   apiAuthEnabled: boolean;
   requestMaxMetadataKeys: number;
   requestMaxMetadataValueLength: number;
-  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }>;
+  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }>;
   getForwarderDigest: (input: { chainId: number; forwarder: string; macro: string; params: string }) => Promise<string>;
+  validateRelaySignature: (input: { chainId: number; signer: string; digest: string; signature: string }) => Promise<boolean>;
 };
 
 function sha256(value: string): string {
@@ -28,6 +28,14 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       reply.status(error.statusCode).send(toErrorBody(error, request.id));
+      return;
+    }
+    const maybeFastifyError = error as { validation?: unknown; code?: string; statusCode?: number };
+    if (
+      maybeFastifyError.validation !== undefined ||
+      maybeFastifyError.code === "FST_ERR_CTP_INVALID_JSON_BODY"
+    ) {
+      reply.status(400).send(toErrorBody(new ApiError(400, "VALIDATION_ERROR", "Request validation failed."), request.id));
       return;
     }
     app.log.error({ err: error }, "Unhandled API error");
@@ -129,7 +137,12 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         }
       }
 
-      const decoded = decodeClearMacroPayload(body.params);
+      let decoded;
+      try {
+        decoded = decodeClearMacroPayload(body.params);
+      } catch {
+        throw new ApiError(400, "INVALID_CLEAR_MACRO_PAYLOAD", "Payload params are not valid ABI-encoded clear macro payload.");
+      }
       if (decoded.macroContract !== body.macro.toLowerCase()) {
         throw new ApiError(400, "INVALID_CLEAR_MACRO_PAYLOAD", "Macro mismatch in payload.");
       }
@@ -164,43 +177,66 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         throw new ApiError(503, readiness.reasonCode ?? "PROVIDER_NOT_READY", "Requested chain is not ready.");
       }
 
-      const digest = await deps.getForwarderDigest({
-        chainId: body.chainId,
-        forwarder: body.forwarder.toLowerCase(),
-        macro: body.macro.toLowerCase(),
-        params: body.params,
-      });
-      const validSignature = await validateEoaSignature({
-        expectedSigner: body.signer.toLowerCase(),
-        digest,
-        signature: body.signature,
-      });
+      let digest: string;
+      try {
+        digest = await deps.getForwarderDigest({
+          chainId: body.chainId,
+          forwarder: body.forwarder.toLowerCase(),
+          macro: body.macro.toLowerCase(),
+          params: body.params,
+        });
+      } catch {
+        throw new ApiError(503, "CHAIN_UNAVAILABLE", "Unable to read ClearMacro digest from app RPCs.");
+      }
+      let validSignature: boolean;
+      try {
+        validSignature = await deps.validateRelaySignature({
+          chainId: body.chainId,
+          signer: body.signer.toLowerCase(),
+          digest,
+          signature: body.signature,
+        });
+      } catch {
+        throw new ApiError(503, "CHAIN_UNAVAILABLE", "Unable to validate signature with app RPCs.");
+      }
       if (!validSignature) {
         throw new ApiError(422, "SIGNATURE_INVALID", "EOA signature validation failed.");
       }
 
-      const inserted = deps.requests.createAccepted({
-        clientId,
-        clientRequestId: body.clientRequestId ?? null,
-        idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
-        requestBodyHash,
-        kind: body.kind,
-        chainId: body.chainId,
-        ozRelayerId: policy.ozRelayerId,
-        forwarder: body.forwarder.toLowerCase(),
-        macro: body.macro.toLowerCase(),
-        signer: body.signer.toLowerCase(),
-        provider: decoded.provider,
-        clearMacroNonce: decoded.nonce.toString(),
-        validAfter: decoded.validAfter.toString(),
-        validBefore: decoded.validBefore.toString(),
-        msgValue: body.msgValue ?? "0",
-        params: body.params,
-        signature: body.signature,
-        permit2Json: null,
-        metadataJson: JSON.stringify(metadata),
-        requiredConfirmations: policy.confirmations,
-      });
+      let inserted;
+      try {
+        inserted = deps.requests.createAccepted({
+          clientId,
+          clientRequestId: body.clientRequestId ?? null,
+          idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
+          requestBodyHash,
+          kind: body.kind,
+          chainId: body.chainId,
+          ozRelayerId: policy.ozRelayerId,
+          forwarder: body.forwarder.toLowerCase(),
+          macro: body.macro.toLowerCase(),
+          signer: body.signer.toLowerCase(),
+          provider: decoded.provider,
+          clearMacroNonce: decoded.nonce.toString(),
+          validAfter: decoded.validAfter.toString(),
+          validBefore: decoded.validBefore.toString(),
+          msgValue: body.msgValue ?? "0",
+          params: body.params,
+          signature: body.signature,
+          permit2Json: null,
+          metadataJson: JSON.stringify(metadata),
+          requiredConfirmations: policy.confirmations,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (message.includes("relay_requests_semantic_uniq") || message.includes("relay_requests.chain_id")) {
+          throw new ApiError(409, "DUPLICATE_REQUEST", "A request with the same chain/forwarder/macro/signer/nonce already exists.");
+        }
+        if (message.includes("relay_requests_client_idempotency_uniq") || message.includes("relay_requests.client_id")) {
+          throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key conflict.");
+        }
+        throw error;
+      }
       deps.audits.append({
         requestId: inserted.id,
         type: "request_accepted",
@@ -296,4 +332,3 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
     };
   });
 }
-

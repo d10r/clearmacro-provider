@@ -3,6 +3,36 @@ import type { LoadedRegistry } from "../config/registry.js";
 import type { RegistryChain } from "../config/schema.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import { clearMacroForwarderV1Abi } from "../tx/builder.js";
+import { validateEoaSignature } from "../validation/clearmacro.js";
+
+const erc1271Abi = [
+  {
+    type: "function",
+    name: "isValidSignature",
+    stateMutability: "view",
+    inputs: [
+      { name: "_hash", type: "bytes32" },
+      { name: "_signature", type: "bytes" },
+    ],
+    outputs: [{ name: "magicValue", type: "bytes4" }],
+  },
+] as const;
+
+const ERC1271_MAGIC_VALUE = "0x1626ba7e";
+
+function isRpcUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("fetch failed") ||
+    message.includes("timeout") ||
+    message.includes("econn") ||
+    message.includes("eai_again") ||
+    message.includes("network") ||
+    message.includes("http request failed") ||
+    /\b5\d\d\b/.test(message) ||
+    message.includes("429")
+  );
+}
 
 function createClients(chain: RegistryChain): { name: string; client: PublicClient }[] {
   return chain.rpcs.map((rpc) => ({
@@ -54,6 +84,7 @@ export async function preflightRunMacro(input: {
   macro: string;
   params: string;
   signer: string;
+  relayerSigner: string;
   signature: string;
   msgValue: string;
 }): Promise<"ok" | "deterministic_revert" | "rpc_unavailable"> {
@@ -64,6 +95,7 @@ export async function preflightRunMacro(input: {
         abi: clearMacroForwarderV1Abi,
         functionName: "runMacro",
         args: [input.macro as `0x${string}`, input.params as `0x${string}`, input.signer as `0x${string}`, input.signature as `0x${string}`],
+        account: input.relayerSigner as `0x${string}`,
         value: BigInt(input.msgValue),
       });
     });
@@ -81,7 +113,7 @@ export async function evaluateChainReadiness(input: {
   registry: LoadedRegistry;
   chainId: number;
   relayerClient: OzRelayerClient;
-}): Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }> {
+}): Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }> {
   const chain = input.registry.chainsById.get(input.chainId);
   if (!chain || !chain.enabled) {
     return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
@@ -95,7 +127,7 @@ export async function evaluateChainReadiness(input: {
   if (!relayerReady) {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
-  let relayer: { address: string; paused: boolean; system_disabled: boolean };
+  let relayer: { address: string; paused: boolean; system_disabled: boolean; network?: string | null; network_type?: string | null };
   try {
     relayer = await input.relayerClient.getRelayer(chain.ozRelayerId);
   } catch {
@@ -103,6 +135,16 @@ export async function evaluateChainReadiness(input: {
   }
   if (relayer.paused || relayer.system_disabled) {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+  }
+  if (relayer.network_type && relayer.network) {
+    try {
+      const network = await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
+      if (network.required_confirmations !== chain.confirmations) {
+        return { ready: false, reasonCode: "CONFIRMATION_MISMATCH" };
+      }
+    } catch {
+      return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+    }
   }
   try {
     const balance = await withRpcFallback(chain, async (client) => client.getBalance({ address: relayer.address as `0x${string}` }));
@@ -115,3 +157,48 @@ export async function evaluateChainReadiness(input: {
   }
 }
 
+export async function validateRelaySignature(input: {
+  registry: LoadedRegistry;
+  chainId: number;
+  signer: string;
+  digest: string;
+  signature: string;
+}): Promise<boolean> {
+  const eoaValid = await validateEoaSignature({
+    expectedSigner: input.signer.toLowerCase(),
+    digest: input.digest,
+    signature: input.signature,
+  });
+  if (eoaValid) {
+    return true;
+  }
+  const chain = input.registry.chainsById.get(input.chainId);
+  if (!chain) {
+    return false;
+  }
+  let code: `0x${string}` | undefined;
+  try {
+    code = await withRpcFallback(chain, async (client) => client.getBytecode({ address: input.signer as `0x${string}` }));
+  } catch (error) {
+    throw new Error(`RPC unavailable during signature validation: ${error instanceof Error ? error.message : "unknown"}`);
+  }
+  if (!code || code === "0x") {
+    return false;
+  }
+  try {
+    const value = await withRpcFallback(chain, async (client) =>
+      client.readContract({
+        address: input.signer as `0x${string}`,
+        abi: erc1271Abi,
+        functionName: "isValidSignature",
+        args: [input.digest as `0x${string}`, input.signature as `0x${string}`],
+      }),
+    );
+    return value.toLowerCase().startsWith(ERC1271_MAGIC_VALUE);
+  } catch (error) {
+    if (isRpcUnavailableError(error)) {
+      throw new Error(`RPC unavailable during ERC-1271 validation: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+    return false;
+  }
+}
