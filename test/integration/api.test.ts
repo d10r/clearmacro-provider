@@ -185,5 +185,40 @@ describe("API integration", () => {
     expect(readyz.statusCode).toBe(503);
     expect(readyz.json<{ ready: boolean }>().ready).toBe(false);
   });
+
+  it("returns idempotent replay even when chain later becomes unready", async () => {
+    let ready = true;
+    const app = await setup({
+      getChainReadiness: async () => (ready ? { ready: true } : { ready: false, reasonCode: "PROVIDER_NOT_READY" }),
+    });
+    const account = privateKeyToAccount("0x59c6995e998f97a5a0044966f094538e7d0f90a33f6f8f6b4a9f4f8f8a8c5d20");
+    const digest = ("0x" + "11".repeat(32)) as `0x${string}`;
+    const signature = await account.sign({ hash: digest });
+    const payload = {
+      kind: "clearMacroV1",
+      chainId: 1,
+      forwarder: "0x0000000000000000000000000000000000000001",
+      macro: "0x0000000000000000000000000000000000000002",
+      signer: account.address,
+      params: makeParams(),
+      signature,
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/relay",
+      payload,
+      headers: { "idempotency-key": "sticky-key" },
+    });
+    expect(first.statusCode).toBe(202);
+    ready = false;
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/relay",
+      payload,
+      headers: { "idempotency-key": "sticky-key" },
+    });
+    expect(replay.statusCode).toBe(202);
+    expect(replay.json<{ requestId: string }>().requestId).toBe(first.json<{ requestId: string }>().requestId);
+  });
 });
 

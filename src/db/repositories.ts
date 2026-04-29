@@ -188,6 +188,14 @@ export class RelayRequestRepository {
       return this.getByIdOrThrow(requestId);
     });
   }
+
+  updateLastError(requestId: string, errorJson: string): RelayRequestRow {
+    const timestamp = nowIso();
+    this.client.db
+      .prepare("UPDATE relay_requests SET last_error_json = ?, updated_at = ? WHERE id = ?")
+      .run(errorJson, timestamp, requestId);
+    return this.getByIdOrThrow(requestId);
+  }
 }
 
 export class AuditEventRepository {

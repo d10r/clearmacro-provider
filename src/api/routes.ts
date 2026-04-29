@@ -78,6 +78,43 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         clientRequestId?: string;
         metadata?: Record<string, string>;
       };
+      const requestBodyHash = sha256(JSON.stringify(body));
+      const idempotencyKey = request.headers["idempotency-key"];
+
+      const authHeader = request.headers.authorization;
+      const clientId = deps.apiAuthEnabled
+        ? (() => {
+            if (!authHeader?.startsWith("Bearer ")) {
+              throw new ApiError(401, "UNAUTHORIZED", "Missing bearer token.");
+            }
+            const tokenHash = sha256(authHeader.slice("Bearer ".length));
+            const client = deps.registry.raw.clients.find((c) => c.apiTokenHash === tokenHash);
+            if (!client || !client.enabled) {
+              throw new ApiError(401, "UNAUTHORIZED", "Invalid API token.");
+            }
+            return client.id;
+          })()
+        : "anonymous";
+
+      if (typeof idempotencyKey === "string") {
+        const existing = deps.requests.findByClientIdempotency(clientId, idempotencyKey);
+        if (existing) {
+          if (existing.requestBodyHash !== requestBodyHash) {
+            throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with different body.");
+          }
+          reply.code(202);
+          return {
+            requestId: existing.id,
+            status: existing.state,
+            chainId: existing.chainId,
+            kind: existing.kind,
+            createdAt: existing.createdAt,
+            updatedAt: existing.updatedAt,
+            statusUrl: `/v1/requests/${existing.id}`,
+          };
+        }
+      }
+
       if (body.kind !== "clearMacroV1") {
         throw new ApiError(400, "UNSUPPORTED_RELAY_KIND", "Only clearMacroV1 is enabled in v1.");
       }
@@ -107,21 +144,6 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
       if (decoded.validAfter > now) {
         throw new ApiError(422, "CLEAR_MACRO_NOT_YET_VALID", "Request is not valid yet.");
       }
-
-      const authHeader = request.headers.authorization;
-      const clientId = deps.apiAuthEnabled
-        ? (() => {
-            if (!authHeader?.startsWith("Bearer ")) {
-              throw new ApiError(401, "UNAUTHORIZED", "Missing bearer token.");
-            }
-            const tokenHash = sha256(authHeader.slice("Bearer ".length));
-            const client = deps.registry.raw.clients.find((c) => c.apiTokenHash === tokenHash);
-            if (!client || !client.enabled) {
-              throw new ApiError(401, "UNAUTHORIZED", "Invalid API token.");
-            }
-            return client.id;
-          })()
-        : "anonymous";
 
       const policy = validateRegistryPolicy(deps.registry, {
         chainId: body.chainId,
@@ -157,32 +179,11 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         throw new ApiError(422, "SIGNATURE_INVALID", "EOA signature validation failed.");
       }
 
-      const idempotencyKey = request.headers["idempotency-key"];
-      if (typeof idempotencyKey === "string") {
-        const existing = deps.requests.findByClientIdempotency(clientId, idempotencyKey);
-        if (existing) {
-          const requestBodyHash = sha256(JSON.stringify(body));
-          if (existing.requestBodyHash !== requestBodyHash) {
-            throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with different body.");
-          }
-          reply.code(202);
-          return {
-            requestId: existing.id,
-            status: existing.state,
-            chainId: existing.chainId,
-            kind: existing.kind,
-            createdAt: existing.createdAt,
-            updatedAt: existing.updatedAt,
-            statusUrl: `/v1/requests/${existing.id}`,
-          };
-        }
-      }
-
       const inserted = deps.requests.createAccepted({
         clientId,
         clientRequestId: body.clientRequestId ?? null,
         idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
-        requestBodyHash: sha256(JSON.stringify(body)),
+        requestBodyHash,
         kind: body.kind,
         chainId: body.chainId,
         ozRelayerId: policy.ozRelayerId,

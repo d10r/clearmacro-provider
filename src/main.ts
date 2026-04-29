@@ -42,7 +42,12 @@ async function main(): Promise<void> {
   });
 
   if (env.relayerWorkerEnabled) {
+    let tickInFlight = false;
     setInterval(() => {
+      if (tickInFlight) {
+        return;
+      }
+      tickInFlight = true;
       processRelayerWorkerTick({
         requests,
         audits,
@@ -50,8 +55,11 @@ async function main(): Promise<void> {
         relayerClient,
         registry,
         batchSize: env.relayerWorkerBatchSize,
+        submitRetryCount: 3,
       }).catch((error) => {
         app.log.error({ err: error }, "Relayer worker tick failed");
+      }).finally(() => {
+        tickInFlight = false;
       });
     }, env.relayerWorkerPollIntervalMs);
   }

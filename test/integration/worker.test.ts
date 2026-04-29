@@ -185,5 +185,58 @@ describe("relayer worker", () => {
     expect(updated.state).toBe("reverted");
     expect(updated.terminal).toBe(1);
   });
+
+  it("retries transient submit failures before submit_failed", async () => {
+    const { requests, audits, relayerTransactions, registry } = setup();
+    const created = requests.createAccepted(createRequestInput());
+    const relayerClient = {
+      submitTransaction: async () => {
+        throw new Error("Relayer HTTP 503");
+      },
+      getTransaction: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    await processRelayerWorkerTick({
+      requests,
+      audits,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      submitRetryCount: 3,
+      preflightSimulation: async () => "ok",
+    });
+    expect(requests.getByIdOrThrow(created.id).state).toBe("queued");
+
+    await processRelayerWorkerTick({
+      requests,
+      audits,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      submitRetryCount: 3,
+      preflightSimulation: async () => "ok",
+    });
+    expect(requests.getByIdOrThrow(created.id).state).toBe("queued");
+
+    await processRelayerWorkerTick({
+      requests,
+      audits,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      submitRetryCount: 3,
+      preflightSimulation: async () => "ok",
+    });
+    expect(requests.getByIdOrThrow(created.id).state).toBe("submit_failed");
+
+    const events = audits.listByRequest(created.id);
+    expect(events.some((e) => e.type === "relayer_submit_retry_scheduled")).toBe(true);
+    expect(events.some((e) => e.type === "relayer_submit_failed")).toBe(true);
+  });
 });
 

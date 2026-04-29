@@ -86,15 +86,25 @@ export async function evaluateChainReadiness(input: {
   if (!chain || !chain.enabled) {
     return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
   }
+  let relayerReady = false;
   try {
-    const relayerReady = await input.relayerClient.ready();
-    if (!relayerReady) {
-      return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
-    }
-    const relayer = await input.relayerClient.getRelayer(chain.ozRelayerId);
-    if (relayer.paused || relayer.system_disabled) {
-      return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
-    }
+    relayerReady = await input.relayerClient.ready();
+  } catch {
+    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+  }
+  if (!relayerReady) {
+    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+  }
+  let relayer: { address: string; paused: boolean; system_disabled: boolean };
+  try {
+    relayer = await input.relayerClient.getRelayer(chain.ozRelayerId);
+  } catch {
+    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+  }
+  if (relayer.paused || relayer.system_disabled) {
+    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+  }
+  try {
     const balance = await withRpcFallback(chain, async (client) => client.getBalance({ address: relayer.address as `0x${string}` }));
     if (balance <= 0n) {
       return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
