@@ -1,6 +1,7 @@
 ethereum-contracts/
 foundry/
 openzeppelin-relayer/
+superfluid-dashboard/
 
 .env
 .env.*

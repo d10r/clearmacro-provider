@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -155,6 +155,36 @@ describe("chain readiness matrix", () => {
       } as never,
     });
     expect(readiness).toEqual({ ready: false, reasonCode: "CONFIRMATION_MISMATCH" });
+  });
+
+  it("returns ready true when relayer and rpc checks pass", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body)) as { id: number | string | null };
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: "0xde0b6b3a7640000" }), { status: 200 });
+      }),
+    );
+    const readiness = await evaluateChainReadiness({
+      registry: makeRegistry("http://rpc.test"),
+      chainId: 1,
+      relayerClient: {
+        ready: async () => true,
+        getRelayer: async () => ({
+          address: "0x00000000000000000000000000000000000000aa",
+          paused: false,
+          system_disabled: false,
+          network_type: "evm",
+          network: "mainnet",
+        }),
+        getNetwork: async () => ({
+          id: "evm:mainnet",
+          network_type: "evm",
+          required_confirmations: 1,
+        }),
+      } as never,
+    });
+    expect(readiness).toEqual({ ready: true });
   });
 
 });

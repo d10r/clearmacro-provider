@@ -29,4 +29,52 @@ describe("oz relayer client", () => {
     const client = new OzRelayerClient(baseUrl, "token", 200);
     await expect(client.getTransaction("r1", "tx-1")).rejects.toThrow(/lookup failed/);
   });
+
+  it("returns relayer details on success envelope", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              address: "0x00000000000000000000000000000000000000aa",
+              paused: false,
+              system_disabled: false,
+              network: "mainnet",
+              network_type: "evm",
+            },
+            error: null,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const client = new OzRelayerClient(baseUrl, "token", 200);
+    const relayer = await client.getRelayer("r1");
+    expect(relayer.address).toBe("0x00000000000000000000000000000000000000aa");
+  });
+
+  it("returns network details on success envelope", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              id: "evm:mainnet",
+              network_type: "evm",
+              required_confirmations: 1,
+            },
+            error: null,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const client = new OzRelayerClient(baseUrl, "token", 200);
+    const network = await client.getNetwork("evm", "mainnet");
+    expect(network.required_confirmations).toBe(1);
+  });
 });

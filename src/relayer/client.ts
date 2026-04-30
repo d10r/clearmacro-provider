@@ -11,6 +11,7 @@ export type OzTransaction = {
   status_reason: string | null;
   created_at: string;
   sent_at: string | null;
+  mined_at?: string | null;
   confirmed_at: string | null;
   gas_price: string | null;
   gas_limit: number | null;
@@ -22,6 +23,13 @@ export type OzTransaction = {
   data: string;
   max_fee_per_gas: string | null;
   max_priority_fee_per_gas: string | null;
+  receipt?: {
+    transactionHash: string;
+    blockNumber: string | number;
+    blockHash?: string;
+    status: string;
+    gasUsed?: string | number;
+  } | null;
 };
 
 export type RelayerDetails = {

@@ -3,13 +3,13 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { registerRoutes } from "./api/routes.js";
 import type { LoadedRegistry } from "./config/registry.js";
-import type { RelayRequestRepository, AuditEventRepository, RelayerTransactionRepository } from "./db/repositories.js";
+import type { RelayExecutionRepository, RelayExecutionEventRepository, RelayerTransactionRepository } from "./db/repositories.js";
 import { createMetrics } from "./metrics/metrics.js";
 
 export type AppDeps = {
   registry: LoadedRegistry;
-  requests: RelayRequestRepository;
-  audits: AuditEventRepository;
+  executions: RelayExecutionRepository;
+  executionEvents: RelayExecutionEventRepository;
   relayerTransactions: RelayerTransactionRepository;
   apiAuthEnabled: boolean;
   requestMaxMetadataKeys: number;
@@ -38,8 +38,8 @@ export async function createApp(deps: AppDeps) {
 
   await registerRoutes(app, {
     registry: deps.registry,
-    requests: deps.requests,
-    audits: deps.audits,
+    executions: deps.executions,
+    executionEvents: deps.executionEvents,
     relayerTransactions: deps.relayerTransactions,
     apiAuthEnabled: deps.apiAuthEnabled,
     requestMaxMetadataKeys: deps.requestMaxMetadataKeys,

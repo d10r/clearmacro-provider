@@ -6,8 +6,8 @@ import { loadRegistry } from "../../src/config/registry.js";
 import { openDatabase } from "../../src/db/client.js";
 import { runMigrations } from "../../src/db/migrations.js";
 import {
-  AuditEventRepository,
-  RelayRequestRepository,
+  RelayExecutionEventRepository,
+  RelayExecutionRepository,
   RelayerTransactionRepository,
 } from "../../src/db/repositories.js";
 
@@ -71,13 +71,13 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
   const registry = loadRegistry({ registryPath, defaultConfirmations: 1 });
   const db = openDatabase(join(dir, "app.sqlite"));
   runMigrations(db);
-  const requests = new RelayRequestRepository(db);
-  const audits = new AuditEventRepository(db);
+  const executions = new RelayExecutionRepository(db);
+  const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
   const built = await createApp({
     registry,
-    requests,
-    audits,
+    executions,
+    executionEvents,
     relayerTransactions,
     apiAuthEnabled: overrides?.apiAuthEnabled ?? false,
     requestMaxMetadataKeys: overrides?.requestMaxMetadataKeys ?? 20,
@@ -92,8 +92,8 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
     app: built.app,
     db,
     registry,
-    requests,
-    audits,
+    executions,
+    executionEvents,
     relayerTransactions,
   };
 }

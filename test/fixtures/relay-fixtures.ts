@@ -30,11 +30,14 @@ export function buildClearMacroParams(overrides?: {
 export async function buildRelayPayload(overrides?: {
   signer?: `0x${string}`;
   signature?: `0x${string}`;
-  kind?: "clearMacroV1" | "permit2ClearMacroV1";
-  params?: `0x${string}`;
+  kind?: "clearMacroV1";
+  payload?: `0x${string}`;
   chainId?: number;
-  forwarder?: `0x${string}`;
-  macro?: `0x${string}`;
+  macroAddress?: `0x${string}`;
+  signerAddress?: `0x${string}`;
+  value?: string;
+  clientRequestId?: string;
+  metadata?: Record<string, string>;
 }) {
   const account = privateKeyToAccount(TEST_PRIVATE_KEY);
   const digest = (`0x${"11".repeat(32)}`) as `0x${string}`;
@@ -42,10 +45,12 @@ export async function buildRelayPayload(overrides?: {
   return {
     kind: overrides?.kind ?? "clearMacroV1",
     chainId: overrides?.chainId ?? 1,
-    forwarder: overrides?.forwarder ?? "0x0000000000000000000000000000000000000001",
-    macro: overrides?.macro ?? "0x0000000000000000000000000000000000000002",
-    signer: overrides?.signer ?? account.address,
-    params: overrides?.params ?? (buildClearMacroParams() as `0x${string}`),
+    macroAddress: overrides?.macroAddress ?? "0x0000000000000000000000000000000000000002",
+    signerAddress: overrides?.signerAddress ?? overrides?.signer ?? account.address,
+    payload: overrides?.payload ?? (buildClearMacroParams() as `0x${string}`),
     signature,
+    value: overrides?.value,
+    clientRequestId: overrides?.clientRequestId,
+    metadata: overrides?.metadata,
   };
 }

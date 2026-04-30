@@ -1,32 +1,49 @@
 import { randomUUID, createHash } from "node:crypto";
 import type { DbClient } from "./client.js";
-import { assertTransitionState, isTerminalState, type RequestState } from "../tx/lifecycle.js";
+import { assertTransitionState, isTerminalState, type RelayExecutionState } from "../tx/lifecycle.js";
 
-export type RelayRequestRow = {
+export type RelayExecutionError = {
+  code: string;
+  message: string;
+  category: "user" | "provider" | "chain" | "relayer" | "unknown";
+  retryable: boolean;
+};
+
+export type RelayExecutionReceipt = {
+  transactionHash: `0x${string}`;
+  blockNumber: string;
+  blockHash?: `0x${string}`;
+  status: "success" | "reverted";
+  gasUsed?: string;
+};
+
+export type RelayExecutionRow = {
   id: string;
   clientId: string;
   clientRequestId: string | null;
   idempotencyKey: string | null;
   requestBodyHash: string;
   kind: string;
-  state: RequestState;
+  state: RelayExecutionState;
   terminal: number;
   chainId: number;
   ozRelayerId: string;
   ozTransactionId: string | null;
-  forwarder: string;
-  macro: string;
-  signer: string;
+  forwarderAddress: string;
+  macroAddress: string;
+  signerAddress: string;
   provider: string;
-  clearMacroNonce: string;
+  nonce: string;
   validAfter: string;
   validBefore: string;
-  msgValue: string;
-  params: string;
-  signature: string | null;
+  value: string;
+  payload: string;
+  signature: string;
   permit2Json: string | null;
   metadataJson: string;
-  currentTxHash: string | null;
+  currentTransactionHash: string | null;
+  transactionHashesJson: string;
+  receiptJson: string | null;
   requiredConfirmations: number | null;
   lastErrorJson: string | null;
   createdAt: string;
@@ -34,14 +51,24 @@ export type RelayRequestRow = {
   terminalAt: string | null;
 };
 
-export type NewRelayRequest = Omit<
-  RelayRequestRow,
-  "id" | "state" | "terminal" | "ozTransactionId" | "currentTxHash" | "lastErrorJson" | "createdAt" | "updatedAt" | "terminalAt"
+export type NewRelayExecution = Omit<
+  RelayExecutionRow,
+  | "id"
+  | "state"
+  | "terminal"
+  | "ozTransactionId"
+  | "currentTransactionHash"
+  | "transactionHashesJson"
+  | "receiptJson"
+  | "lastErrorJson"
+  | "createdAt"
+  | "updatedAt"
+  | "terminalAt"
 >;
 
-export type AuditEvent = {
+export type RelayExecutionEvent = {
   id: string;
-  requestId: string;
+  executionId: string;
   type: string;
   actor: string;
   reason: string;
@@ -49,31 +76,33 @@ export type AuditEvent = {
   createdAt: string;
 };
 
-const mapRelayRequest = (row: Record<string, unknown>): RelayRequestRow => ({
+const mapRelayExecution = (row: Record<string, unknown>): RelayExecutionRow => ({
   id: String(row.id),
   clientId: String(row.client_id),
   clientRequestId: row.client_request_id === null ? null : String(row.client_request_id),
   idempotencyKey: row.idempotency_key === null ? null : String(row.idempotency_key),
   requestBodyHash: String(row.request_body_hash),
   kind: String(row.kind),
-  state: String(row.state) as RequestState,
+  state: String(row.state) as RelayExecutionState,
   terminal: Number(row.terminal),
   chainId: Number(row.chain_id),
   ozRelayerId: String(row.oz_relayer_id),
   ozTransactionId: row.oz_transaction_id === null ? null : String(row.oz_transaction_id),
-  forwarder: String(row.forwarder),
-  macro: String(row.macro),
-  signer: String(row.signer),
+  forwarderAddress: String(row.forwarder_address),
+  macroAddress: String(row.macro_address),
+  signerAddress: String(row.signer_address),
   provider: String(row.provider),
-  clearMacroNonce: String(row.clear_macro_nonce),
+  nonce: String(row.nonce),
   validAfter: String(row.valid_after),
   validBefore: String(row.valid_before),
-  msgValue: String(row.msg_value),
-  params: String(row.params),
-  signature: row.signature === null ? null : String(row.signature),
+  value: String(row.value),
+  payload: String(row.payload),
+  signature: String(row.signature),
   permit2Json: row.permit2_json === null ? null : String(row.permit2_json),
   metadataJson: String(row.metadata_json),
-  currentTxHash: row.current_tx_hash === null ? null : String(row.current_tx_hash),
+  currentTransactionHash: row.current_transaction_hash === null ? null : String(row.current_transaction_hash),
+  transactionHashesJson: String(row.transaction_hashes_json),
+  receiptJson: row.receipt_json === null ? null : String(row.receipt_json),
   requiredConfirmations: row.required_confirmations === null ? null : Number(row.required_confirmations),
   lastErrorJson: row.last_error_json === null ? null : String(row.last_error_json),
   createdAt: String(row.created_at),
@@ -89,20 +118,20 @@ export function hashRequestBody(body: unknown): string {
   return createHash("sha256").update(JSON.stringify(body)).digest("hex");
 }
 
-export class RelayRequestRepository {
+export class RelayExecutionRepository {
   constructor(private readonly client: DbClient) {}
 
-  createAccepted(input: NewRelayRequest): RelayRequestRow {
+  createAccepted(input: NewRelayExecution): RelayExecutionRow {
     const timestamp = nowIso();
     const id = randomUUID();
     this.client.db
       .prepare(
-        `INSERT INTO relay_requests(
+        `INSERT INTO relay_executions(
             id, client_id, client_request_id, idempotency_key, request_body_hash, kind, state, terminal,
-            chain_id, oz_relayer_id, oz_transaction_id, forwarder, macro, signer, provider, clear_macro_nonce,
-            valid_after, valid_before, msg_value, params, signature, permit2_json, metadata_json, current_tx_hash,
+            chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, provider, nonce,
+            valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, current_transaction_hash, transaction_hashes_json, receipt_json,
             required_confirmations, last_error_json, created_at, updated_at, terminal_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
       )
       .run(
         id,
@@ -113,15 +142,15 @@ export class RelayRequestRepository {
         input.kind,
         input.chainId,
         input.ozRelayerId,
-        input.forwarder,
-        input.macro,
-        input.signer,
+        input.forwarderAddress,
+        input.macroAddress,
+        input.signerAddress,
         input.provider,
-        input.clearMacroNonce,
+        input.nonce,
         input.validAfter,
         input.validBefore,
-        input.msgValue,
-        input.params,
+        input.value,
+        input.payload,
         input.signature,
         input.permit2Json,
         input.metadataJson,
@@ -132,91 +161,137 @@ export class RelayRequestRepository {
     return this.getByIdOrThrow(id);
   }
 
-  getById(id: string): RelayRequestRow | undefined {
-    const row = this.client.db.prepare("SELECT * FROM relay_requests WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return row ? mapRelayRequest(row) : undefined;
+  getById(id: string): RelayExecutionRow | undefined {
+    const row = this.client.db.prepare("SELECT * FROM relay_executions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? mapRelayExecution(row) : undefined;
   }
 
-  getByIdOrThrow(id: string): RelayRequestRow {
+  getByIdOrThrow(id: string): RelayExecutionRow {
     const row = this.getById(id);
     if (!row) {
-      throw new Error(`Request not found: ${id}`);
+      throw new Error(`Execution not found: ${id}`);
     }
     return row;
   }
 
-  findByClientIdempotency(clientId: string, idempotencyKey: string): RelayRequestRow | undefined {
+  findByClientIdempotency(clientId: string, idempotencyKey: string): RelayExecutionRow | undefined {
     const row = this.client.db
-      .prepare("SELECT * FROM relay_requests WHERE client_id = ? AND idempotency_key = ?")
+      .prepare("SELECT * FROM relay_executions WHERE client_id = ? AND idempotency_key = ?")
       .get(clientId, idempotencyKey) as Record<string, unknown> | undefined;
-    return row ? mapRelayRequest(row) : undefined;
+    return row ? mapRelayExecution(row) : undefined;
   }
 
-  listSubmittable(limit: number): RelayRequestRow[] {
+  listSubmittable(limit: number): RelayExecutionRow[] {
     const rows = this.client.db
       .prepare(
-        "SELECT * FROM relay_requests WHERE terminal = 0 AND oz_transaction_id IS NULL AND state IN ('accepted', 'queued') ORDER BY created_at ASC LIMIT ?",
+        "SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NULL AND state IN ('accepted', 'pending') ORDER BY created_at ASC LIMIT ?",
       )
       .all(limit) as Record<string, unknown>[];
-    return rows.map(mapRelayRequest);
+    return rows.map(mapRelayExecution);
   }
 
-  listPending(limit: number): RelayRequestRow[] {
+  listPollable(limit: number): RelayExecutionRow[] {
     const rows = this.client.db
-      .prepare("SELECT * FROM relay_requests WHERE terminal = 0 AND oz_transaction_id IS NOT NULL AND state = 'pending' ORDER BY updated_at ASC LIMIT ?")
+      .prepare("SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NOT NULL AND state IN ('pending','submitted','included') ORDER BY updated_at ASC LIMIT ?")
       .all(limit) as Record<string, unknown>[];
-    return rows.map(mapRelayRequest);
+    return rows.map(mapRelayExecution);
   }
 
-  transitionState(requestId: string, toState: RequestState, options?: { errorJson?: string; ozTransactionId?: string; txHash?: string }): RelayRequestRow {
+  transitionState(executionId: string, toState: RelayExecutionState, options?: { errorJson?: string; ozTransactionId?: string }): RelayExecutionRow {
     return this.client.transaction(() => {
-      const existing = this.getByIdOrThrow(requestId);
+      const existing = this.getByIdOrThrow(executionId);
       assertTransitionState(existing.state, toState);
       const terminal = isTerminalState(toState) ? 1 : 0;
       const timestamp = nowIso();
       const terminalAt = terminal ? timestamp : null;
       this.client.db
         .prepare(
-          `UPDATE relay_requests
+          `UPDATE relay_executions
            SET state = ?, terminal = ?, updated_at = ?, terminal_at = COALESCE(terminal_at, ?),
                oz_transaction_id = COALESCE(?, oz_transaction_id),
-               current_tx_hash = COALESCE(?, current_tx_hash),
                last_error_json = COALESCE(?, last_error_json)
            WHERE id = ?`,
         )
-        .run(toState, terminal, timestamp, terminalAt, options?.ozTransactionId ?? null, options?.txHash ?? null, options?.errorJson ?? null, requestId);
-      return this.getByIdOrThrow(requestId);
+        .run(toState, terminal, timestamp, terminalAt, options?.ozTransactionId ?? null, options?.errorJson ?? null, executionId);
+      return this.getByIdOrThrow(executionId);
     });
   }
 
-  updateLastError(requestId: string, errorJson: string): RelayRequestRow {
+  updateMetadata(
+    executionId: string,
+    updates: {
+      ozTransactionId?: string;
+      currentTransactionHash?: `0x${string}`;
+      transactionHashes?: `0x${string}`[];
+      receipt?: RelayExecutionReceipt;
+      error?: RelayExecutionError;
+    },
+  ): RelayExecutionRow {
+    const existing = this.getByIdOrThrow(executionId);
+    const nextHashes = updates.transactionHashes ? JSON.stringify(updates.transactionHashes) : existing.transactionHashesJson;
+    const nextReceipt = updates.receipt ? JSON.stringify(updates.receipt) : existing.receiptJson;
+    const nextError = updates.error ? JSON.stringify(updates.error) : existing.lastErrorJson;
+    this.client.db
+      .prepare(
+        `UPDATE relay_executions
+         SET oz_transaction_id = COALESCE(?, oz_transaction_id),
+             current_transaction_hash = COALESCE(?, current_transaction_hash),
+             transaction_hashes_json = ?,
+             receipt_json = ?,
+             last_error_json = ?,
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        updates.ozTransactionId ?? null,
+        updates.currentTransactionHash ?? null,
+        nextHashes,
+        nextReceipt,
+        nextError,
+        nowIso(),
+        executionId,
+      );
+    return this.getByIdOrThrow(executionId);
+  }
+
+  appendCurrentHashChange(executionId: string, hash: `0x${string}`): RelayExecutionRow {
+    const row = this.getByIdOrThrow(executionId);
+    const hashes = JSON.parse(row.transactionHashesJson) as `0x${string}`[];
+    hashes.push(hash);
+    return this.updateMetadata(executionId, {
+      currentTransactionHash: hash,
+      transactionHashes: hashes,
+    });
+  }
+
+  updateLastError(executionId: string, errorJson: string): RelayExecutionRow {
     const timestamp = nowIso();
     this.client.db
-      .prepare("UPDATE relay_requests SET last_error_json = ?, updated_at = ? WHERE id = ?")
-      .run(errorJson, timestamp, requestId);
-    return this.getByIdOrThrow(requestId);
+      .prepare("UPDATE relay_executions SET last_error_json = ?, updated_at = ? WHERE id = ?")
+      .run(errorJson, timestamp, executionId);
+    return this.getByIdOrThrow(executionId);
   }
 }
 
-export class AuditEventRepository {
+export class RelayExecutionEventRepository {
   constructor(private readonly client: DbClient) {}
 
-  append(input: Omit<AuditEvent, "id" | "createdAt"> & { id?: string; createdAt?: string }): AuditEvent {
+  append(input: Omit<RelayExecutionEvent, "id" | "createdAt"> & { id?: string; createdAt?: string }): RelayExecutionEvent {
     const id = input.id ?? randomUUID();
     const createdAt = input.createdAt ?? nowIso();
     this.client.db
-      .prepare("INSERT INTO audit_events(id, request_id, type, actor, reason, details_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)")
-      .run(id, input.requestId, input.type, input.actor, input.reason, input.detailsJson, createdAt);
-    return { id, requestId: input.requestId, type: input.type, actor: input.actor, reason: input.reason, detailsJson: input.detailsJson, createdAt };
+      .prepare("INSERT INTO relay_execution_events(id, execution_id, type, actor, reason, details_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.executionId, input.type, input.actor, input.reason, input.detailsJson, createdAt);
+    return { id, executionId: input.executionId, type: input.type, actor: input.actor, reason: input.reason, detailsJson: input.detailsJson, createdAt };
   }
 
-  listByRequest(requestId: string): AuditEvent[] {
+  listByExecution(executionId: string): RelayExecutionEvent[] {
     const rows = this.client.db
-      .prepare("SELECT * FROM audit_events WHERE request_id = ? ORDER BY created_at ASC")
-      .all(requestId) as Record<string, unknown>[];
+      .prepare("SELECT * FROM relay_execution_events WHERE execution_id = ? ORDER BY created_at ASC")
+      .all(executionId) as Record<string, unknown>[];
     return rows.map((row) => ({
       id: String(row.id),
-      requestId: String(row.request_id),
+      executionId: String(row.execution_id),
       type: String(row.type),
       actor: String(row.actor),
       reason: String(row.reason),
@@ -228,7 +303,7 @@ export class AuditEventRepository {
 
 export type RelayerTransactionUpsert = {
   ozTransactionId: string;
-  requestId: string;
+  executionId: string;
   ozRelayerId: string;
   status: string;
   statusReason: string | null;
@@ -240,13 +315,15 @@ export type RelayerTransactionUpsert = {
   maxPriorityFeePerGas: string | null;
   rawJson: string;
   submittedAt: string | null;
+  includedAt: string | null;
   confirmedAt: string | null;
+  receiptJson: string | null;
   lastPolledAt: string | null;
 };
 
 export type RelayerTransactionRow = {
   ozTransactionId: string;
-  requestId: string;
+  executionId: string;
   ozRelayerId: string;
   status: string;
   statusReason: string | null;
@@ -258,7 +335,9 @@ export type RelayerTransactionRow = {
   maxPriorityFeePerGas: string | null;
   rawJson: string;
   submittedAt: string | null;
+  includedAt: string | null;
   confirmedAt: string | null;
+  receiptJson: string | null;
   lastPolledAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -266,7 +345,7 @@ export type RelayerTransactionRow = {
 
 const mapRelayerTransaction = (row: Record<string, unknown>): RelayerTransactionRow => ({
   ozTransactionId: String(row.oz_transaction_id),
-  requestId: String(row.request_id),
+  executionId: String(row.execution_id),
   ozRelayerId: String(row.oz_relayer_id),
   status: String(row.status),
   statusReason: row.status_reason === null ? null : String(row.status_reason),
@@ -278,7 +357,9 @@ const mapRelayerTransaction = (row: Record<string, unknown>): RelayerTransaction
   maxPriorityFeePerGas: row.max_priority_fee_per_gas === null ? null : String(row.max_priority_fee_per_gas),
   rawJson: String(row.raw_json),
   submittedAt: row.submitted_at === null ? null : String(row.submitted_at),
+  includedAt: row.included_at === null ? null : String(row.included_at),
   confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
+  receiptJson: row.receipt_json === null ? null : String(row.receipt_json),
   lastPolledAt: row.last_polled_at === null ? null : String(row.last_polled_at),
   createdAt: String(row.created_at),
   updatedAt: String(row.updated_at),
@@ -292,11 +373,11 @@ export class RelayerTransactionRepository {
     this.client.db
       .prepare(
         `INSERT INTO relayer_transactions(
-          oz_transaction_id, request_id, oz_relayer_id, status, status_reason, tx_hash, nonce, gas_limit, gas_price,
-          max_fee_per_gas, max_priority_fee_per_gas, raw_json, submitted_at, confirmed_at, last_polled_at, created_at, updated_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          oz_transaction_id, execution_id, oz_relayer_id, status, status_reason, tx_hash, nonce, gas_limit, gas_price,
+          max_fee_per_gas, max_priority_fee_per_gas, raw_json, submitted_at, included_at, confirmed_at, receipt_json, last_polled_at, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(oz_transaction_id) DO UPDATE SET
-          request_id = excluded.request_id,
+          execution_id = excluded.execution_id,
           oz_relayer_id = excluded.oz_relayer_id,
           status = excluded.status,
           status_reason = excluded.status_reason,
@@ -308,13 +389,15 @@ export class RelayerTransactionRepository {
           max_priority_fee_per_gas = excluded.max_priority_fee_per_gas,
           raw_json = excluded.raw_json,
           submitted_at = excluded.submitted_at,
+          included_at = excluded.included_at,
           confirmed_at = excluded.confirmed_at,
+          receipt_json = excluded.receipt_json,
           last_polled_at = excluded.last_polled_at,
           updated_at = excluded.updated_at`,
       )
       .run(
         input.ozTransactionId,
-        input.requestId,
+        input.executionId,
         input.ozRelayerId,
         input.status,
         input.statusReason,
@@ -326,17 +409,19 @@ export class RelayerTransactionRepository {
         input.maxPriorityFeePerGas,
         input.rawJson,
         input.submittedAt,
+        input.includedAt,
         input.confirmedAt,
+        input.receiptJson,
         input.lastPolledAt,
         timestamp,
         timestamp,
       );
   }
 
-  getByRequestId(requestId: string): RelayerTransactionRow | undefined {
+  getByExecutionId(executionId: string): RelayerTransactionRow | undefined {
     const row = this.client.db
-      .prepare("SELECT * FROM relayer_transactions WHERE request_id = ? ORDER BY updated_at DESC LIMIT 1")
-      .get(requestId) as Record<string, unknown> | undefined;
+      .prepare("SELECT * FROM relayer_transactions WHERE execution_id = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(executionId) as Record<string, unknown> | undefined;
     return row ? mapRelayerTransaction(row) : undefined;
   }
 }

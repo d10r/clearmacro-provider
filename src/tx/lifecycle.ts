@@ -1,53 +1,49 @@
-export const requestStates = [
+export const relayExecutionStates = [
   "accepted",
-  "queued",
-  "preflight_failed",
-  "submit_failed",
   "pending",
-  "confirmed",
+  "submitted",
+  "included",
+  "succeeded",
   "reverted",
-  "canceled",
-  "expired",
   "rejected",
   "failed",
+  "expired",
+  "canceled",
 ] as const;
 
-export type RequestState = (typeof requestStates)[number];
+export type RelayExecutionState = (typeof relayExecutionStates)[number];
 
-const terminalStates = new Set<RequestState>([
-  "preflight_failed",
-  "submit_failed",
-  "confirmed",
+const terminalStates = new Set<RelayExecutionState>([
+  "succeeded",
   "reverted",
-  "canceled",
-  "expired",
   "rejected",
   "failed",
+  "expired",
+  "canceled",
 ]);
 
-const allowedTransitions: Readonly<Record<RequestState, ReadonlySet<RequestState>>> = {
-  accepted: new Set(["queued", "preflight_failed", "expired", "rejected", "failed"]),
-  queued: new Set(["pending", "preflight_failed", "submit_failed", "expired", "failed"]),
-  pending: new Set(["confirmed", "reverted", "canceled", "expired", "failed"]),
-  preflight_failed: new Set(),
-  submit_failed: new Set(),
-  confirmed: new Set(),
+const allowedTransitions: Readonly<Record<RelayExecutionState, ReadonlySet<RelayExecutionState>>> = {
+  accepted: new Set(["pending", "rejected", "expired", "failed"]),
+  pending: new Set(["submitted", "rejected", "expired", "failed", "canceled"]),
+  submitted: new Set(["submitted", "included", "succeeded", "reverted", "expired", "failed", "canceled"]),
+  included: new Set(["succeeded", "reverted", "failed"]),
+  succeeded: new Set(),
   reverted: new Set(),
-  canceled: new Set(),
-  expired: new Set(),
   rejected: new Set(),
   failed: new Set(),
+  expired: new Set(),
+  canceled: new Set(),
 };
 
-export function isTerminalState(state: RequestState): boolean {
+export function isTerminalState(state: RelayExecutionState): boolean {
   return terminalStates.has(state);
 }
 
-export function canTransitionState(from: RequestState, to: RequestState): boolean {
+export function canTransitionState(from: RelayExecutionState, to: RelayExecutionState): boolean {
   return allowedTransitions[from].has(to);
 }
 
-export function assertTransitionState(from: RequestState, to: RequestState): void {
+export function assertTransitionState(from: RelayExecutionState, to: RelayExecutionState): void {
   if (!canTransitionState(from, to)) {
     throw new Error(`Invalid state transition: ${from} -> ${to}`);
   }

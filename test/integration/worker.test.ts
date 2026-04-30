@@ -5,15 +5,15 @@ import { tmpdir } from "node:os";
 import { openDatabase } from "../../src/db/client.js";
 import { runMigrations } from "../../src/db/migrations.js";
 import {
-  AuditEventRepository,
-  RelayRequestRepository,
+  RelayExecutionEventRepository,
+  RelayExecutionRepository,
   RelayerTransactionRepository,
-  type NewRelayRequest,
+  type NewRelayExecution,
 } from "../../src/db/repositories.js";
 import { processRelayerWorkerTick } from "../../src/relayer/worker.js";
 import { loadRegistry } from "../../src/config/registry.js";
 
-function createRequestInput(overrides?: Partial<NewRelayRequest>): NewRelayRequest {
+function createExecutionInput(overrides?: Partial<NewRelayExecution>): NewRelayExecution {
   return {
     clientId: "anonymous",
     clientRequestId: null,
@@ -22,15 +22,15 @@ function createRequestInput(overrides?: Partial<NewRelayRequest>): NewRelayReque
     kind: "clearMacroV1",
     chainId: 1,
     ozRelayerId: "relayer-main",
-    forwarder: "0x0000000000000000000000000000000000000001",
-    macro: "0x0000000000000000000000000000000000000002",
-    signer: "0x0000000000000000000000000000000000000003",
+    forwarderAddress: "0x0000000000000000000000000000000000000001",
+    macroAddress: "0x0000000000000000000000000000000000000002",
+    signerAddress: "0x0000000000000000000000000000000000000003",
     provider: "macros.superfluid.eth",
-    clearMacroNonce: "1",
+    nonce: "1",
     validAfter: "0",
     validBefore: "0",
-    msgValue: "0",
-    params: "0x1234",
+    value: "0",
+    payload: "0x1234",
     signature: "0x1234",
     permit2Json: null,
     metadataJson: "{}",
@@ -43,8 +43,8 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), "worker-test-"));
   const db = openDatabase(join(dir, "app.sqlite"));
   runMigrations(db);
-  const requests = new RelayRequestRepository(db);
-  const audits = new AuditEventRepository(db);
+  const executions = new RelayExecutionRepository(db);
+  const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
 
   const registryPath = join(dir, "registry.json");
@@ -90,13 +90,13 @@ function setup() {
   );
   const registry = loadRegistry({ registryPath, defaultConfirmations: 1 });
 
-  return { requests, audits, relayerTransactions, registry };
+  return { executions, executionEvents, relayerTransactions, registry };
 }
 
 describe("relayer worker", () => {
-  it("submits accepted request and transitions to pending", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
+  it("submits accepted execution and transitions to submitted when hash exists", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
 
     const relayerClient = {
       getRelayer: async () => ({
@@ -122,6 +122,8 @@ describe("relayer worker", () => {
         data: "0x",
         max_fee_per_gas: null,
         max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
       }),
       getTransaction: async () => {
         throw new Error("not used");
@@ -129,8 +131,8 @@ describe("relayer worker", () => {
     };
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -138,18 +140,19 @@ describe("relayer worker", () => {
       preflightSimulation: async () => "ok",
     });
 
-    const updated = requests.getByIdOrThrow(created.id);
-    expect(updated.state).toBe("pending");
+    const updated = executions.getByIdOrThrow(created.id);
+    expect(updated.state).toBe("submitted");
     expect(updated.ozTransactionId).toBe("oz-tx-1");
-    const relayer = relayerTransactions.getByRequestId(created.id);
+    expect(updated.currentTransactionHash).toBe("0x" + "ab".repeat(32));
+    const relayer = relayerTransactions.getByExecutionId(created.id);
     expect(relayer?.status).toBe("submitted");
   });
 
-  it("projects pending request to reverted on failed revert reason", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
-    requests.transitionState(created.id, "queued");
-    requests.transitionState(created.id, "pending", { ozTransactionId: "oz-tx-1" });
+  it("projects submitted execution to reverted on failed revert reason", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
+    executions.transitionState(created.id, "pending");
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-tx-1" });
 
     const relayerClient = {
       getRelayer: async () => ({
@@ -178,12 +181,14 @@ describe("relayer worker", () => {
         data: "0x",
         max_fee_per_gas: null,
         max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
       }),
     };
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -191,14 +196,14 @@ describe("relayer worker", () => {
       preflightSimulation: async () => "ok",
     });
 
-    const updated = requests.getByIdOrThrow(created.id);
+    const updated = executions.getByIdOrThrow(created.id);
     expect(updated.state).toBe("reverted");
     expect(updated.terminal).toBe(1);
   });
 
-  it("retries transient submit failures before submit_failed", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
+  it("retries transient submit failures before failed", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
     const relayerClient = {
       getRelayer: async () => ({
         address: "0x0000000000000000000000000000000000000010",
@@ -214,8 +219,8 @@ describe("relayer worker", () => {
     };
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -223,11 +228,11 @@ describe("relayer worker", () => {
       submitRetryCount: 3,
       preflightSimulation: async () => "ok",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("queued");
+    expect(executions.getByIdOrThrow(created.id).state).toBe("pending");
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -235,11 +240,11 @@ describe("relayer worker", () => {
       submitRetryCount: 3,
       preflightSimulation: async () => "ok",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("queued");
+    expect(executions.getByIdOrThrow(created.id).state).toBe("pending");
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -247,20 +252,20 @@ describe("relayer worker", () => {
       submitRetryCount: 3,
       preflightSimulation: async () => "ok",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("submit_failed");
+    expect(executions.getByIdOrThrow(created.id).state).toBe("failed");
 
-    const events = audits.listByRequest(created.id);
+    const events = executionEvents.listByExecution(created.id);
     expect(events.some((e) => e.type === "relayer_submit_retry_scheduled")).toBe(true);
-    expect(events.some((e) => e.type === "relayer_submit_failed")).toBe(true);
+    expect(events.some((e) => e.type === "terminal_error_set")).toBe(true);
   });
 
   it("passes signer and calldata inputs to preflight simulation", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(
-      createRequestInput({
-        signer: "0x00000000000000000000000000000000000000aa",
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(
+      createExecutionInput({
+        signerAddress: "0x00000000000000000000000000000000000000aa",
         signature: "0xbeef",
-        params: "0x9999",
+        payload: "0x9999",
       }),
     );
     const preflightCalls: Array<{ signer: string; signature: string; params: string }> = [];
@@ -288,6 +293,8 @@ describe("relayer worker", () => {
         data: "0x",
         max_fee_per_gas: null,
         max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
       }),
       getTransaction: async () => {
         throw new Error("not used");
@@ -295,8 +302,8 @@ describe("relayer worker", () => {
     };
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -313,12 +320,12 @@ describe("relayer worker", () => {
       signature: "0xbeef",
       params: "0x9999",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("pending");
+    expect(executions.getByIdOrThrow(created.id).state).toBe("submitted");
   });
 
-  it("keeps request queued when preflight reports rpc_unavailable", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
+  it("keeps execution pending when preflight reports rpc_unavailable", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
     const relayerClient = {
       getRelayer: async () => ({
         address: "0x0000000000000000000000000000000000000010",
@@ -334,8 +341,8 @@ describe("relayer worker", () => {
     };
 
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
@@ -343,15 +350,16 @@ describe("relayer worker", () => {
       preflightSimulation: async () => "rpc_unavailable",
     });
 
-    expect(requests.getByIdOrThrow(created.id).state).toBe("queued");
-    expect(audits.listByRequest(created.id).some((e) => e.type === "preflight_retry_scheduled")).toBe(true);
+    expect(executions.getByIdOrThrow(created.id).state).toBe("pending");
+    expect(executionEvents.listByExecution(created.id).some((e) => e.type === "preflight_retry_scheduled")).toBe(true);
   });
 
-  it("keeps pending state for unknown non-terminal relayer statuses", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
-    requests.transitionState(created.id, "queued");
-    requests.transitionState(created.id, "pending", { ozTransactionId: "oz-tx-2" });
+  it("keeps submitted state for unknown non-terminal relayer statuses with hash", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
+    executions.transitionState(created.id, "pending");
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-tx-2" });
+    executions.appendCurrentHashChange(created.id, `0x${"ef".repeat(32)}`);
     const relayerClient = {
       getRelayer: async () => ({
         address: "0x0000000000000000000000000000000000000010",
@@ -379,25 +387,27 @@ describe("relayer worker", () => {
         data: "0x",
         max_fee_per_gas: null,
         max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
       }),
     };
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
       batchSize: 10,
       preflightSimulation: async () => "ok",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("pending");
+    expect(executions.getByIdOrThrow(created.id).state).toBe("submitted");
   });
 
-  it("records polling audit event when pending status lookup errors", async () => {
-    const { requests, audits, relayerTransactions, registry } = setup();
-    const created = requests.createAccepted(createRequestInput());
-    requests.transitionState(created.id, "queued");
-    requests.transitionState(created.id, "pending", { ozTransactionId: "oz-tx-3" });
+  it("records polling audit event when status lookup errors", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput());
+    executions.transitionState(created.id, "pending");
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-tx-3" });
     const relayerClient = {
       getRelayer: async () => ({
         address: "0x0000000000000000000000000000000000000010",
@@ -412,16 +422,69 @@ describe("relayer worker", () => {
       },
     };
     await processRelayerWorkerTick({
-      requests,
-      audits,
+      executions,
+      executionEvents,
       relayerTransactions,
       relayerClient: relayerClient as never,
       registry,
       batchSize: 10,
       preflightSimulation: async () => "ok",
     });
-    expect(requests.getByIdOrThrow(created.id).state).toBe("pending");
-    expect(audits.listByRequest(created.id).some((event) => event.type === "relayer_status_polled")).toBe(true);
+    expect(executions.getByIdOrThrow(created.id).state).toBe("submitted");
+    expect(executionEvents.listByExecution(created.id).some((event) => event.type === "relayer_status_polled")).toBe(true);
+  });
+
+  it("projects mined to included when confirmations are not final", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createAccepted(createExecutionInput({ requiredConfirmations: 2 }));
+    executions.transitionState(created.id, "pending");
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-tx-4" });
+    executions.appendCurrentHashChange(created.id, `0x${"11".repeat(32)}`);
+    const relayerClient = {
+      getRelayer: async () => ({
+        address: "0x0000000000000000000000000000000000000010",
+        paused: false,
+        system_disabled: false,
+      }),
+      submitTransaction: async () => {
+        throw new Error("not used");
+      },
+      getTransaction: async () => ({
+        id: "oz-tx-4",
+        hash: "0x" + "11".repeat(32),
+        status: "mined",
+        status_reason: null,
+        created_at: new Date().toISOString(),
+        sent_at: new Date().toISOString(),
+        mined_at: new Date().toISOString(),
+        confirmed_at: null,
+        gas_price: "1",
+        gas_limit: 21000,
+        nonce: 1,
+        value: "0",
+        from: "0x0000000000000000000000000000000000000010",
+        to: "0x0000000000000000000000000000000000000001",
+        relayer_id: "relayer-main",
+        data: "0x",
+        max_fee_per_gas: null,
+        max_priority_fee_per_gas: null,
+        receipt: {
+          transactionHash: "0x" + "11".repeat(32),
+          blockNumber: "1",
+          status: "0x1",
+        },
+      }),
+    };
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightSimulation: async () => "ok",
+    });
+    expect(executions.getByIdOrThrow(created.id).state).toBe("included");
   });
 });
 

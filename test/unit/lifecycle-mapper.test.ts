@@ -1,21 +1,82 @@
 import { describe, expect, it } from "vitest";
-import { mapRelayerStatusToRequestState } from "../../src/relayer/mapper.js";
+import { projectRelayerState } from "../../src/relayer/mapper.js";
 
-describe("mapRelayerStatusToRequestState", () => {
-  it("maps submitted to pending", () => {
-    expect(mapRelayerStatusToRequestState("submitted", null)).toBe("pending");
+describe("projectRelayerState", () => {
+  it("maps submitted without hash to pending", () => {
+    expect(
+      projectRelayerState({
+        status: "submitted",
+        statusReason: null,
+        hash: null,
+        confirmedAt: null,
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("pending");
   });
 
-  it("maps confirmed to confirmed", () => {
-    expect(mapRelayerStatusToRequestState("confirmed", null)).toBe("confirmed");
+  it("maps hash-presence statuses to submitted", () => {
+    expect(
+      projectRelayerState({
+        status: "pending",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: null,
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("submitted");
+  });
+
+  it("maps confirmed to succeeded", () => {
+    expect(
+      projectRelayerState({
+        status: "confirmed",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: new Date().toISOString(),
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("succeeded");
   });
 
   it("maps revert-like failed to reverted", () => {
-    expect(mapRelayerStatusToRequestState("failed", "execution reverted")).toBe("reverted");
+    expect(
+      projectRelayerState({
+        status: "failed",
+        statusReason: "execution reverted",
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: null,
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("reverted");
   });
 
   it("maps generic failed to failed", () => {
-    expect(mapRelayerStatusToRequestState("failed", "rpc unavailable")).toBe("failed");
+    expect(
+      projectRelayerState({
+        status: "failed",
+        statusReason: "rpc unavailable",
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: null,
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("failed");
+  });
+
+  it("maps receipt status reverted to reverted", () => {
+    expect(
+      projectRelayerState({
+        status: "mined",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: null,
+        receipt: {
+          transactionHash: `0x${"ab".repeat(32)}`,
+          blockNumber: "1",
+          status: "reverted",
+        },
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("reverted");
   });
 });
 

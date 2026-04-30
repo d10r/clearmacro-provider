@@ -1,6 +1,6 @@
 # ClearMacro Provider
 
-ClearMacro Provider is a TypeScript backend service that accepts signed ClearMacro relay requests, validates policy against a static registry, tracks lifecycle state in SQLite, and executes transactions through OpenZeppelin Relayer.
+ClearMacro Provider is a TypeScript backend service that accepts signed ClearMacro relay executions, validates policy against a static registry, tracks execution lifecycle state in SQLite, and executes transactions through OpenZeppelin Relayer.
 
 ## What It Runs
 
@@ -10,12 +10,31 @@ ClearMacro Provider is a TypeScript backend service that accepts signed ClearMac
 
 Main endpoints:
 
-- `POST /v1/relay`
-- `GET /v1/requests/:id`
+- `POST /v1/relay-executions`
+- `GET /v1/relay-executions/:id`
 - `GET /v1/capabilities`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /metrics`
+
+Public relay execution states:
+
+- `accepted`
+- `pending`
+- `submitted`
+- `included`
+- `succeeded`
+- `reverted`
+- `rejected`
+- `failed`
+- `expired`
+- `canceled`
+
+Idempotency:
+
+- Provide `Idempotency-Key` on `POST /v1/relay-executions` to make create calls retry-safe.
+- Replay with same canonical body returns the same execution resource.
+- Reusing a key with a different canonical body returns `409 IDEMPOTENCY_CONFLICT`.
 
 ## Requirements
 

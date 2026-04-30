@@ -2,7 +2,7 @@ import { loadEnv } from "./config/env.js";
 import { loadRegistry } from "./config/registry.js";
 import { openDatabase } from "./db/client.js";
 import { runMigrations } from "./db/migrations.js";
-import { AuditEventRepository, RelayRequestRepository, RelayerTransactionRepository } from "./db/repositories.js";
+import { RelayExecutionEventRepository, RelayExecutionRepository, RelayerTransactionRepository } from "./db/repositories.js";
 import { OzRelayerClient } from "./relayer/client.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { createApp } from "./app.js";
@@ -16,15 +16,15 @@ async function main(): Promise<void> {
     runMigrations(db);
   }
 
-  const requests = new RelayRequestRepository(db);
-  const audits = new AuditEventRepository(db);
+  const executions = new RelayExecutionRepository(db);
+  const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
   const relayerClient = new OzRelayerClient(env.ozRelayerUrl, env.ozRelayerApiKey, env.relayerRequestTimeoutMs);
 
   const { app } = await createApp({
     registry,
-    requests,
-    audits,
+    executions,
+    executionEvents,
     relayerTransactions,
     apiAuthEnabled: env.apiAuthEnabled,
     requestMaxMetadataKeys: env.requestMaxMetadataKeys,
@@ -57,8 +57,8 @@ async function main(): Promise<void> {
       }
       tickInFlight = true;
       processRelayerWorkerTick({
-        requests,
-        audits,
+        executions,
+        executionEvents,
         relayerTransactions,
         relayerClient,
         registry,

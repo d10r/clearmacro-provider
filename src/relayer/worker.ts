@@ -1,14 +1,14 @@
-import type { RelayRequestRepository, AuditEventRepository, RelayerTransactionRepository } from "../db/repositories.js";
+import type { RelayExecutionRepository, RelayExecutionEventRepository, RelayerTransactionRepository } from "../db/repositories.js";
 import type { OzRelayerClient } from "./client.js";
-import { mapRelayerStatusToRequestState } from "./mapper.js";
-import { isTerminalState } from "../tx/lifecycle.js";
+import { projectRelayerState } from "./mapper.js";
 import { buildRunMacroCalldata } from "../tx/builder.js";
 import type { LoadedRegistry } from "../config/registry.js";
 import { preflightRunMacro } from "../chain/readiness.js";
+import type { RelayExecutionReceipt } from "../db/repositories.js";
 
 export type RelayerWorkerDeps = {
-  requests: RelayRequestRepository;
-  audits: AuditEventRepository;
+  executions: RelayExecutionRepository;
+  executionEvents: RelayExecutionEventRepository;
   relayerTransactions: RelayerTransactionRepository;
   relayerClient: OzRelayerClient;
   registry: LoadedRegistry;
@@ -55,38 +55,38 @@ function getSubmitAttemptsFromErrorJson(value: string | null): number {
 
 export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise<void> {
   const submitRetryCount = deps.submitRetryCount ?? 3;
-  const submittable = deps.requests.listSubmittable(deps.batchSize);
-  for (const request of submittable) {
-    if (request.state === "accepted") {
-      deps.requests.transitionState(request.id, "queued");
+  const submittable = deps.executions.listSubmittable(deps.batchSize);
+  for (const execution of submittable) {
+    if (execution.state === "accepted") {
+      deps.executions.transitionState(execution.id, "pending");
     }
     try {
-      const chain = deps.registry.chainsById.get(request.chainId);
+      const chain = deps.registry.chainsById.get(execution.chainId);
       if (!chain) {
-        deps.requests.transitionState(request.id, "failed", {
-          errorJson: JSON.stringify({ code: "CHAIN_NOT_ALLOWED", message: "Chain missing from registry" }),
+        deps.executions.transitionState(execution.id, "failed", {
+          errorJson: JSON.stringify({ code: "CHAIN_NOT_ALLOWED", message: "Chain missing from registry", category: "provider", retryable: false }),
         });
         continue;
       }
       const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
-      const relayer = await deps.relayerClient.getRelayer(request.ozRelayerId);
+      const relayer = await deps.relayerClient.getRelayer(execution.ozRelayerId);
       const preflight = await preflightFn({
         chain,
-        forwarder: request.forwarder,
-        macro: request.macro,
-        params: request.params,
-        signer: request.signer,
+        forwarder: execution.forwarderAddress,
+        macro: execution.macroAddress,
+        params: execution.payload,
+        signer: execution.signerAddress,
         relayerSigner: relayer.address,
-        signature: request.signature ?? "0x",
-        msgValue: request.msgValue,
+        signature: execution.signature,
+        msgValue: execution.value,
       });
       if (preflight === "deterministic_revert") {
-        deps.requests.transitionState(request.id, "preflight_failed", {
-          errorJson: JSON.stringify({ code: "SIMULATION_REVERTED", message: "Preflight simulation reverted" }),
+        deps.executions.transitionState(execution.id, "rejected", {
+          errorJson: JSON.stringify({ code: "PREFLIGHT_REVERTED", message: "Preflight simulation reverted before submission.", category: "user", retryable: false }),
         });
-        deps.audits.append({
-          requestId: request.id,
-          type: "preflight_failed",
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: "terminal_error_set",
           actor: "worker",
           reason: "Deterministic preflight revert",
           detailsJson: JSON.stringify({}),
@@ -94,8 +94,8 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         continue;
       }
       if (preflight === "rpc_unavailable") {
-        deps.audits.append({
-          requestId: request.id,
+        deps.executionEvents.append({
+          executionId: execution.id,
           type: "preflight_retry_scheduled",
           actor: "worker",
           reason: "Preflight RPC unavailable; will retry",
@@ -104,21 +104,21 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         continue;
       }
 
-      const tx = await deps.relayerClient.submitTransaction(request.ozRelayerId, {
-        to: request.forwarder,
-        value: request.msgValue,
+      const tx = await deps.relayerClient.submitTransaction(execution.ozRelayerId, {
+        to: execution.forwarderAddress,
+        value: execution.value,
         data: buildRunMacroCalldata({
-          macro: request.macro,
-          params: request.params,
-          signer: request.signer,
-          signature: request.signature ?? "0x",
+          macro: execution.macroAddress,
+          params: execution.payload,
+          signer: execution.signerAddress,
+          signature: execution.signature,
         }),
         speed: "fast",
       });
       deps.relayerTransactions.upsert({
         ozTransactionId: tx.id,
-        requestId: request.id,
-        ozRelayerId: request.ozRelayerId,
+        executionId: execution.id,
+        ozRelayerId: execution.ozRelayerId,
         status: tx.status,
         statusReason: tx.status_reason,
         txHash: tx.hash,
@@ -129,20 +129,27 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
         rawJson: JSON.stringify(tx),
         submittedAt: tx.sent_at,
+        includedAt: tx.mined_at ?? null,
         confirmedAt: tx.confirmed_at,
+        receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
         lastPolledAt: new Date().toISOString(),
       });
-      const transitionOptions = tx.hash ? { ozTransactionId: tx.id, txHash: tx.hash } : { ozTransactionId: tx.id };
-      deps.requests.transitionState(request.id, "pending", transitionOptions);
-      deps.audits.append({
-        requestId: request.id,
+      deps.executions.updateMetadata(execution.id, {
+        ozTransactionId: tx.id,
+      });
+      if (tx.hash) {
+        deps.executions.appendCurrentHashChange(execution.id, tx.hash as `0x${string}`);
+        deps.executions.transitionState(execution.id, "submitted");
+      }
+      deps.executionEvents.append({
+        executionId: execution.id,
         type: "relayer_submit_accepted",
         actor: "worker",
         reason: "Relayer accepted transaction intent",
         detailsJson: JSON.stringify({ ozTransactionId: tx.id, status: tx.status }),
       });
     } catch (error) {
-      const currentAttempts = getSubmitAttemptsFromErrorJson(request.lastErrorJson);
+      const currentAttempts = getSubmitAttemptsFromErrorJson(execution.lastErrorJson);
       const nextAttempts = currentAttempts + 1;
       const errorPayload = JSON.stringify({
         code: "RELAYER_SUBMIT_ERROR",
@@ -151,9 +158,9 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
       });
       const transient = isTransientSubmitError(error);
       if (transient && nextAttempts < submitRetryCount) {
-        deps.requests.updateLastError(request.id, errorPayload);
-        deps.audits.append({
-          requestId: request.id,
+        deps.executions.updateLastError(execution.id, errorPayload);
+        deps.executionEvents.append({
+          executionId: execution.id,
           type: "relayer_submit_retry_scheduled",
           actor: "worker",
           reason: "Transient relayer submission failure",
@@ -161,10 +168,17 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         });
         continue;
       }
-      deps.requests.transitionState(request.id, "submit_failed", { errorJson: errorPayload });
-      deps.audits.append({
-        requestId: request.id,
-        type: "relayer_submit_failed",
+      deps.executions.transitionState(execution.id, "failed", {
+        errorJson: JSON.stringify({
+          code: "RELAYER_SUBMIT_FAILED",
+          message: "Relayer did not accept transaction intent after retries.",
+          category: "relayer",
+          retryable: false,
+        }),
+      });
+      deps.executionEvents.append({
+        executionId: execution.id,
+        type: "terminal_error_set",
         actor: "worker",
         reason: "Relayer submission failed",
         detailsJson: JSON.stringify({ message: error instanceof Error ? error.message : "unknown" }),
@@ -172,17 +186,17 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
     }
   }
 
-  const pending = deps.requests.listPending(deps.batchSize);
-  for (const request of pending) {
-    if (!request.ozTransactionId) {
+  const pollable = deps.executions.listPollable(deps.batchSize);
+  for (const execution of pollable) {
+    if (!execution.ozTransactionId) {
       continue;
     }
     try {
-      const tx = await deps.relayerClient.getTransaction(request.ozRelayerId, request.ozTransactionId);
+      const tx = await deps.relayerClient.getTransaction(execution.ozRelayerId, execution.ozTransactionId);
       deps.relayerTransactions.upsert({
         ozTransactionId: tx.id,
-        requestId: request.id,
-        ozRelayerId: request.ozRelayerId,
+        executionId: execution.id,
+        ozRelayerId: execution.ozRelayerId,
         status: tx.status,
         statusReason: tx.status_reason,
         txHash: tx.hash,
@@ -193,24 +207,75 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
         rawJson: JSON.stringify(tx),
         submittedAt: tx.sent_at,
+        includedAt: tx.mined_at ?? null,
         confirmedAt: tx.confirmed_at,
+        receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
         lastPolledAt: new Date().toISOString(),
       });
-      const mapped = mapRelayerStatusToRequestState(tx.status, tx.status_reason);
-      if (mapped !== "pending" && !isTerminalState(request.state)) {
-        const transitionOptions = tx.hash ? { txHash: tx.hash } : undefined;
-        deps.requests.transitionState(request.id, mapped, transitionOptions);
-        deps.audits.append({
-          requestId: request.id,
-          type: "finalized",
+      if (tx.hash && tx.hash !== execution.currentTransactionHash) {
+        deps.executions.appendCurrentHashChange(execution.id, tx.hash as `0x${string}`);
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: execution.currentTransactionHash ? "transaction_hash_replaced" : "transaction_hash_observed",
           actor: "worker",
-          reason: `Projected terminal state: ${mapped}`,
+          reason: execution.currentTransactionHash ? "Replacement hash observed" : "First hash observed",
+          detailsJson: JSON.stringify({ hash: tx.hash }),
+        });
+      }
+
+      let receipt: RelayExecutionReceipt | null = null;
+      if (tx.receipt) {
+        receipt = {
+          transactionHash: tx.receipt.transactionHash as `0x${string}`,
+          blockNumber: String(tx.receipt.blockNumber),
+          status: tx.receipt.status === "0x0" ? "reverted" : "success",
+        };
+        if (tx.receipt.blockHash) {
+          receipt.blockHash = tx.receipt.blockHash as `0x${string}`;
+        }
+        if (tx.receipt.gasUsed !== undefined && tx.receipt.gasUsed !== null) {
+          receipt.gasUsed = String(tx.receipt.gasUsed);
+        }
+      }
+
+      const projected = projectRelayerState({
+        status: tx.status,
+        statusReason: tx.status_reason,
+        hash: tx.hash,
+        confirmedAt: tx.confirmed_at,
+        receipt,
+        requiredConfirmations: execution.requiredConfirmations,
+      });
+
+      const metadataUpdates: {
+        receipt?: RelayExecutionReceipt;
+        error?: {
+          code: string;
+          message: string;
+          category: "user" | "provider" | "chain" | "relayer" | "unknown";
+          retryable: boolean;
+        };
+      } = {};
+      if (receipt) {
+        metadataUpdates.receipt = receipt;
+      }
+      if (projected.error) {
+        metadataUpdates.error = projected.error;
+      }
+      deps.executions.updateMetadata(execution.id, metadataUpdates);
+      if (execution.state !== projected.state) {
+        deps.executions.transitionState(execution.id, projected.state);
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: "state_changed",
+          actor: "worker",
+          reason: `Projected state: ${projected.state}`,
           detailsJson: JSON.stringify({ relayerStatus: tx.status, statusReason: tx.status_reason }),
         });
       }
     } catch (error) {
-      deps.audits.append({
-        requestId: request.id,
+      deps.executionEvents.append({
+        executionId: execution.id,
         type: "relayer_status_polled",
         actor: "worker",
         reason: "Relayer polling error",
