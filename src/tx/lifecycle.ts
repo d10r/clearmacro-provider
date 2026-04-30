@@ -1,32 +1,12 @@
-export const relayExecutionStates = [
-  "accepted",
-  "pending",
-  "submitted",
-  "included",
-  "succeeded",
-  "reverted",
-  "rejected",
-  "failed",
-  "expired",
-  "canceled",
-] as const;
+export const relayExecutionStates = ["pending", "submitted", "succeeded", "reverted", "rejected", "failed", "expired", "canceled"] as const;
 
 export type RelayExecutionState = (typeof relayExecutionStates)[number];
 
-const terminalStates = new Set<RelayExecutionState>([
-  "succeeded",
-  "reverted",
-  "rejected",
-  "failed",
-  "expired",
-  "canceled",
-]);
+const terminalStates = new Set<RelayExecutionState>(["succeeded", "reverted", "rejected", "failed", "expired", "canceled"]);
 
 const allowedTransitions: Readonly<Record<RelayExecutionState, ReadonlySet<RelayExecutionState>>> = {
-  accepted: new Set(["pending", "rejected", "expired", "failed"]),
-  pending: new Set(["submitted", "rejected", "expired", "failed", "canceled"]),
-  submitted: new Set(["submitted", "included", "succeeded", "reverted", "expired", "failed", "canceled"]),
-  included: new Set(["succeeded", "reverted", "failed"]),
+  pending: new Set(["submitted", "rejected", "failed", "expired", "canceled"]),
+  submitted: new Set(["submitted", "succeeded", "reverted", "failed", "expired", "canceled"]),
   succeeded: new Set(),
   reverted: new Set(),
   rejected: new Set(),
@@ -48,4 +28,3 @@ export function assertTransitionState(from: RelayExecutionState, to: RelayExecut
     throw new Error(`Invalid state transition: ${from} -> ${to}`);
   }
 }
-

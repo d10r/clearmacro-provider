@@ -5,6 +5,7 @@ import { buildRunMacroCalldata } from "../tx/builder.js";
 import type { LoadedRegistry } from "../config/registry.js";
 import { preflightRunMacro } from "../chain/readiness.js";
 import type { RelayExecutionReceipt } from "../db/repositories.js";
+import { normalizeOzReceipt, type RawOzReceipt } from "./receiptNormalize.js";
 
 export type RelayerWorkerDeps = {
   executions: RelayExecutionRepository;
@@ -57,9 +58,6 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
   const submitRetryCount = deps.submitRetryCount ?? 3;
   const submittable = deps.executions.listSubmittable(deps.batchSize);
   for (const execution of submittable) {
-    if (execution.state === "accepted") {
-      deps.executions.transitionState(execution.id, "pending");
-    }
     try {
       const chain = deps.registry.chainsById.get(execution.chainId);
       if (!chain) {
@@ -68,38 +66,67 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         });
         continue;
       }
-      const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
       const relayer = await deps.relayerClient.getRelayer(execution.ozRelayerId);
-      const preflight = await preflightFn({
-        chain,
-        forwarder: execution.forwarderAddress,
-        macro: execution.macroAddress,
-        params: execution.payload,
-        signer: execution.signerAddress,
-        relayerSigner: relayer.address,
-        signature: execution.signature,
-        msgValue: execution.value,
-      });
-      if (preflight === "deterministic_revert") {
-        deps.executions.transitionState(execution.id, "rejected", {
-          errorJson: JSON.stringify({ code: "PREFLIGHT_REVERTED", message: "Preflight simulation reverted before submission.", category: "user", retryable: false }),
+      const skipPreflight = execution.forceAfterPreflightRevert === 1;
+      if (!skipPreflight) {
+        const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
+        const preflight = await preflightFn({
+          chain,
+          forwarder: execution.forwarderAddress,
+          macro: execution.macroAddress,
+          params: execution.payload,
+          signer: execution.signerAddress,
+          relayerSigner: relayer.address,
+          signature: execution.signature,
+          msgValue: execution.value,
         });
-        deps.executionEvents.append({
-          executionId: execution.id,
-          type: "terminal_error_set",
-          actor: "worker",
-          reason: "Deterministic preflight revert",
-          detailsJson: JSON.stringify({}),
-        });
-        continue;
+        if (preflight === "deterministic_revert") {
+          deps.executions.transitionState(execution.id, "rejected", {
+            errorJson: JSON.stringify({
+              code: "PREFLIGHT_REVERTED",
+              message: "Post-creation safety check predicted revert before submission.",
+              category: "user",
+              retryable: false,
+            }),
+          });
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: "terminal_error_set",
+            actor: "worker",
+            reason: "Deterministic preflight revert",
+            detailsJson: JSON.stringify({}),
+          });
+          continue;
+        }
+        if (preflight === "rpc_unavailable") {
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: "preflight_retry_scheduled",
+            actor: "worker",
+            reason: "Preflight RPC unavailable; will retry",
+            detailsJson: JSON.stringify({ retry: true }),
+          });
+          continue;
+        }
       }
-      if (preflight === "rpc_unavailable") {
+
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const validBefore = BigInt(execution.validBefore);
+      if (validBefore !== 0n && validBefore <= now) {
+        deps.executions.transitionState(execution.id, "expired", {
+          errorJson: JSON.stringify({
+            code: "CLEAR_MACRO_EXPIRED",
+            message: "Validity window elapsed before submission.",
+            category: "user",
+            retryable: false,
+          }),
+        });
         deps.executionEvents.append({
           executionId: execution.id,
-          type: "preflight_retry_scheduled",
+          type: "state_changed",
           actor: "worker",
-          reason: "Preflight RPC unavailable; will retry",
-          detailsJson: JSON.stringify({ retry: true }),
+          reason: "Expired before submission",
+          detailsJson: JSON.stringify({}),
         });
         continue;
       }
@@ -134,13 +161,7 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
         lastPolledAt: new Date().toISOString(),
       });
-      deps.executions.updateMetadata(execution.id, {
-        ozTransactionId: tx.id,
-      });
-      if (tx.hash) {
-        deps.executions.appendCurrentHashChange(execution.id, tx.hash as `0x${string}`);
-        deps.executions.transitionState(execution.id, "submitted");
-      }
+      deps.executions.applySubmitAcknowledgement(execution.id, tx.id, tx.hash ? (tx.hash as `0x${string}`) : null);
       deps.executionEvents.append({
         executionId: execution.id,
         type: "relayer_submit_accepted",
@@ -221,21 +242,26 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
           reason: execution.currentTransactionHash ? "Replacement hash observed" : "First hash observed",
           detailsJson: JSON.stringify({ hash: tx.hash }),
         });
+        const refreshed = deps.executions.getByIdOrThrow(execution.id);
+        if (refreshed.state === "pending" && refreshed.currentTransactionHash) {
+          deps.executions.transitionState(refreshed.id, "submitted");
+        }
       }
 
       let receipt: RelayExecutionReceipt | null = null;
       if (tx.receipt) {
-        receipt = {
-          transactionHash: tx.receipt.transactionHash as `0x${string}`,
-          blockNumber: String(tx.receipt.blockNumber),
-          status: tx.receipt.status === "0x0" ? "reverted" : "success",
+        const raw: RawOzReceipt = {
+          transactionHash: tx.receipt.transactionHash,
+          blockNumber: tx.receipt.blockNumber,
+          status: tx.receipt.status,
         };
-        if (tx.receipt.blockHash) {
-          receipt.blockHash = tx.receipt.blockHash as `0x${string}`;
+        if (tx.receipt.blockHash !== undefined) {
+          raw.blockHash = tx.receipt.blockHash;
         }
-        if (tx.receipt.gasUsed !== undefined && tx.receipt.gasUsed !== null) {
-          receipt.gasUsed = String(tx.receipt.gasUsed);
+        if (tx.receipt.gasUsed !== undefined) {
+          raw.gasUsed = tx.receipt.gasUsed;
         }
+        receipt = normalizeOzReceipt(raw);
       }
 
       const projected = projectRelayerState({
@@ -263,7 +289,8 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         metadataUpdates.error = projected.error;
       }
       deps.executions.updateMetadata(execution.id, metadataUpdates);
-      if (execution.state !== projected.state) {
+      const latest = deps.executions.getByIdOrThrow(execution.id);
+      if (latest.state !== projected.state) {
         deps.executions.transitionState(execution.id, projected.state);
         deps.executionEvents.append({
           executionId: execution.id,
@@ -273,15 +300,14 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
           detailsJson: JSON.stringify({ relayerStatus: tx.status, statusReason: tx.status_reason }),
         });
       }
-    } catch (error) {
+    } catch {
       deps.executionEvents.append({
         executionId: execution.id,
         type: "relayer_status_polled",
         actor: "worker",
         reason: "Relayer polling error",
-        detailsJson: JSON.stringify({ message: error instanceof Error ? error.message : "unknown" }),
+        detailsJson: JSON.stringify({}),
       });
     }
   }
 }
-

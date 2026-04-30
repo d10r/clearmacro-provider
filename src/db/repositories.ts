@@ -21,8 +21,9 @@ export type RelayExecutionRow = {
   id: string;
   clientId: string;
   clientRequestId: string | null;
-  idempotencyKey: string | null;
   requestBodyHash: string;
+  digest: string;
+  domain: string;
   kind: string;
   state: RelayExecutionState;
   terminal: number;
@@ -32,7 +33,6 @@ export type RelayExecutionRow = {
   forwarderAddress: string;
   macroAddress: string;
   signerAddress: string;
-  provider: string;
   nonce: string;
   validAfter: string;
   validBefore: string;
@@ -41,6 +41,7 @@ export type RelayExecutionRow = {
   signature: string;
   permit2Json: string | null;
   metadataJson: string;
+  forceAfterPreflightRevert: number;
   currentTransactionHash: string | null;
   transactionHashesJson: string;
   receiptJson: string | null;
@@ -76,12 +77,45 @@ export type RelayExecutionEvent = {
   createdAt: string;
 };
 
+export type CreateRequestAuditOutcome =
+  | "CREATED"
+  | "DUPLICATE_REPLAYED"
+  | "DUPLICATE_HIDDEN"
+  | "MACRO_NOT_ALLOWED"
+  | "PROVIDER_NOT_ALLOWED"
+  | "INVALID_CLEAR_MACRO_PAYLOAD"
+  | "CLEAR_MACRO_EXPIRED"
+  | "CLEAR_MACRO_NOT_YET_VALID"
+  | "SIGNATURE_INVALID"
+  | "PREFLIGHT_REVERTED"
+  | "READINESS_UNAVAILABLE"
+  | "CHAIN_UNAVAILABLE"
+  | "CHAIN_NOT_ALLOWED"
+  | "VALIDATION_ERROR";
+
+export type CreateRequestAuditInput = {
+  clientId: string;
+  requestBodyHash: string;
+  outcomeCode: CreateRequestAuditOutcome;
+  executionId: string | null;
+  chainId: number | null;
+  kind: string | null;
+  forwarderAddress: string | null;
+  domain: string | null;
+  macroAddress: string | null;
+  signerAddress: string | null;
+  providerName: string | null;
+  nonce: string | null;
+  digest: string | null;
+};
+
 const mapRelayExecution = (row: Record<string, unknown>): RelayExecutionRow => ({
   id: String(row.id),
   clientId: String(row.client_id),
   clientRequestId: row.client_request_id === null ? null : String(row.client_request_id),
-  idempotencyKey: row.idempotency_key === null ? null : String(row.idempotency_key),
   requestBodyHash: String(row.request_body_hash),
+  digest: String(row.digest),
+  domain: String(row.domain),
   kind: String(row.kind),
   state: String(row.state) as RelayExecutionState,
   terminal: Number(row.terminal),
@@ -91,7 +125,6 @@ const mapRelayExecution = (row: Record<string, unknown>): RelayExecutionRow => (
   forwarderAddress: String(row.forwarder_address),
   macroAddress: String(row.macro_address),
   signerAddress: String(row.signer_address),
-  provider: String(row.provider),
   nonce: String(row.nonce),
   validAfter: String(row.valid_after),
   validBefore: String(row.valid_before),
@@ -100,6 +133,7 @@ const mapRelayExecution = (row: Record<string, unknown>): RelayExecutionRow => (
   signature: String(row.signature),
   permit2Json: row.permit2_json === null ? null : String(row.permit2_json),
   metadataJson: String(row.metadata_json),
+  forceAfterPreflightRevert: Number(row.force_after_preflight_revert),
   currentTransactionHash: row.current_transaction_hash === null ? null : String(row.current_transaction_hash),
   transactionHashesJson: String(row.transaction_hashes_json),
   receiptJson: row.receipt_json === null ? null : String(row.receipt_json),
@@ -114,38 +148,35 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function hashRequestBody(body: unknown): string {
-  return createHash("sha256").update(JSON.stringify(body)).digest("hex");
-}
-
 export class RelayExecutionRepository {
   constructor(private readonly client: DbClient) {}
 
-  createAccepted(input: NewRelayExecution): RelayExecutionRow {
+  createPending(input: NewRelayExecution): RelayExecutionRow {
     const timestamp = nowIso();
     const id = randomUUID();
     this.client.db
       .prepare(
         `INSERT INTO relay_executions(
-            id, client_id, client_request_id, idempotency_key, request_body_hash, kind, state, terminal,
-            chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, provider, nonce,
-            valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, current_transaction_hash, transaction_hashes_json, receipt_json,
+            id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
+            chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, nonce,
+            valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, force_after_preflight_revert,
+            current_transaction_hash, transaction_hashes_json, receipt_json,
             required_confirmations, last_error_json, created_at, updated_at, terminal_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
       )
       .run(
         id,
         input.clientId,
         input.clientRequestId,
-        input.idempotencyKey,
         input.requestBodyHash,
+        input.digest,
+        input.domain,
         input.kind,
         input.chainId,
         input.ozRelayerId,
         input.forwarderAddress,
         input.macroAddress,
         input.signerAddress,
-        input.provider,
         input.nonce,
         input.validAfter,
         input.validBefore,
@@ -154,6 +185,7 @@ export class RelayExecutionRepository {
         input.signature,
         input.permit2Json,
         input.metadataJson,
+        input.forceAfterPreflightRevert,
         input.requiredConfirmations,
         timestamp,
         timestamp,
@@ -174,17 +206,17 @@ export class RelayExecutionRepository {
     return row;
   }
 
-  findByClientIdempotency(clientId: string, idempotencyKey: string): RelayExecutionRow | undefined {
+  findByDedupKey(chainId: number, forwarderAddress: string, signerAddress: string, digest: string): RelayExecutionRow | undefined {
     const row = this.client.db
-      .prepare("SELECT * FROM relay_executions WHERE client_id = ? AND idempotency_key = ?")
-      .get(clientId, idempotencyKey) as Record<string, unknown> | undefined;
+      .prepare("SELECT * FROM relay_executions WHERE chain_id = ? AND forwarder_address = ? AND signer_address = ? AND digest = ?")
+      .get(chainId, forwarderAddress.toLowerCase(), signerAddress.toLowerCase(), digest) as Record<string, unknown> | undefined;
     return row ? mapRelayExecution(row) : undefined;
   }
 
   listSubmittable(limit: number): RelayExecutionRow[] {
     const rows = this.client.db
       .prepare(
-        "SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NULL AND state IN ('accepted', 'pending') ORDER BY created_at ASC LIMIT ?",
+        "SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NULL AND state = 'pending' ORDER BY created_at ASC LIMIT ?",
       )
       .all(limit) as Record<string, unknown>[];
     return rows.map(mapRelayExecution);
@@ -192,7 +224,9 @@ export class RelayExecutionRepository {
 
   listPollable(limit: number): RelayExecutionRow[] {
     const rows = this.client.db
-      .prepare("SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NOT NULL AND state IN ('pending','submitted','included') ORDER BY updated_at ASC LIMIT ?")
+      .prepare(
+        "SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NOT NULL AND state IN ('pending','submitted') ORDER BY updated_at ASC LIMIT ?",
+      )
       .all(limit) as Record<string, unknown>[];
     return rows.map(mapRelayExecution);
   }
@@ -264,6 +298,34 @@ export class RelayExecutionRepository {
     });
   }
 
+  applySubmitAcknowledgement(executionId: string, ozTransactionId: string, hash: `0x${string}` | null): RelayExecutionRow {
+    return this.client.transaction(() => {
+      const row = this.getByIdOrThrow(executionId);
+      const timestamp = nowIso();
+      if (hash) {
+        const hashes = JSON.parse(row.transactionHashesJson) as `0x${string}`[];
+        hashes.push(hash);
+        this.client.db
+          .prepare(
+            `UPDATE relay_executions
+             SET oz_transaction_id = ?, current_transaction_hash = ?, transaction_hashes_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(ozTransactionId, hash, JSON.stringify(hashes), timestamp, executionId);
+        const updated = this.getByIdOrThrow(executionId);
+        if (updated.state === "pending") {
+          assertTransitionState("pending", "submitted");
+          this.client.db
+            .prepare(`UPDATE relay_executions SET state = 'submitted', updated_at = ? WHERE id = ?`)
+            .run(timestamp, executionId);
+        }
+      } else {
+        this.client.db.prepare(`UPDATE relay_executions SET oz_transaction_id = ?, updated_at = ? WHERE id = ?`).run(ozTransactionId, timestamp, executionId);
+      }
+      return this.getByIdOrThrow(executionId);
+    });
+  }
+
   updateLastError(executionId: string, errorJson: string): RelayExecutionRow {
     const timestamp = nowIso();
     this.client.db
@@ -298,6 +360,38 @@ export class RelayExecutionEventRepository {
       detailsJson: String(row.details_json),
       createdAt: String(row.created_at),
     }));
+  }
+}
+
+export class CreateRequestAuditLogRepository {
+  constructor(private readonly client: DbClient) {}
+
+  append(input: CreateRequestAuditInput): void {
+    const id = randomUUID();
+    this.client.db
+      .prepare(
+        `INSERT INTO create_request_audit_log(
+          id, created_at, client_id, request_body_hash, outcome_code, execution_id,
+          chain_id, kind, forwarder_address, domain, macro_address, signer_address, provider_name, nonce, digest
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        nowIso(),
+        input.clientId,
+        input.requestBodyHash,
+        input.outcomeCode,
+        input.executionId,
+        input.chainId,
+        input.kind,
+        input.forwarderAddress,
+        input.domain,
+        input.macroAddress,
+        input.signerAddress,
+        input.providerName,
+        input.nonce,
+        input.digest,
+      );
   }
 }
 
@@ -426,3 +520,6 @@ export class RelayerTransactionRepository {
   }
 }
 
+export function sha256HexUtf8(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}

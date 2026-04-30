@@ -1,56 +1,76 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createTestHarness } from "../fixtures/harness.js";
 import { buildClearMacroParams, buildRelayPayload } from "../fixtures/relay-fixtures.js";
 
+function bearer(token: string): { authorization: string } {
+  return { authorization: `Bearer ${token}` };
+}
+
 describe("API integration", () => {
-  it("accepts valid relay execution and returns execution resource", async () => {
+  it("accepts valid relay execution and returns pending execution resource", async () => {
     const { app } = await createTestHarness();
     const payload = await buildRelayPayload();
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "test-key" },
-    });
-    expect(accepted.statusCode).toBe(202);
-    const acceptedBody = accepted.json<{ id: string; state: string }>();
-    expect(acceptedBody.state).toBe("accepted");
-    const status = await app.inject({ method: "GET", url: `/v1/relay-executions/${acceptedBody.id}` });
+    const created = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(created.statusCode).toBe(202);
+    const createdBody = created.json<{ id: string; state: string; transaction?: { hash: string } }>();
+    expect(createdBody.state).toBe("pending");
+    expect(createdBody.transaction).toBeUndefined();
+    const status = await app.inject({ method: "GET", url: `/v1/relay-executions/${createdBody.id}` });
     expect(status.statusCode).toBe(200);
-    const statusBody = status.json<{ id: string; state: string; transaction: { hashes: string[] } }>();
-    expect(statusBody.id).toBe(acceptedBody.id);
-    expect(statusBody.state).toBe("accepted");
-    expect(statusBody.transaction.hashes).toEqual([]);
+    const statusBody = status.json<{ id: string; state: string; transaction?: unknown }>();
+    expect(statusBody.id).toBe(createdBody.id);
+    expect(statusBody.state).toBe("pending");
   });
 
-  it("returns idempotent replay and conflict", async () => {
+  it("replays identical signed intent with 200 for same anonymous caller", async () => {
     const { app } = await createTestHarness();
     const payload = await buildRelayPayload();
-    const first = await app.inject({
-      method: "POST",
-      url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "same-key" },
-    });
-    const second = await app.inject({
-      method: "POST",
-      url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "same-key" },
-    });
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    const second = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
     expect(first.statusCode).toBe(202);
     expect(second.statusCode).toBe(200);
     expect(first.json<{ id: string }>().id).toBe(second.json<{ id: string }>().id);
+  });
 
-    const conflict = await app.inject({
-      method: "POST",
-      url: "/v1/relay-executions",
-      payload: { ...payload, clientRequestId: "different" },
-      headers: { "idempotency-key": "same-key" },
+  it("returns 409 DUPLICATE_EXECUTION without leaking id across authenticated clients", async () => {
+    const tokA = "token-a";
+    const tokB = "token-b";
+    const app = (
+      await createTestHarness({
+        env: {
+          apiAuthEnabled: true,
+          apiClients: [
+            { id: "client-a", apiTokenHash: createHash("sha256").update(tokA).digest("hex").toLowerCase() },
+            { id: "client-b", apiTokenHash: createHash("sha256").update(tokB).digest("hex").toLowerCase() },
+          ],
+        },
+      })
+    ).app;
+    const payload = await buildRelayPayload();
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokA) });
+    expect(first.statusCode).toBe(202);
+    const dup = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokB) });
+    expect(dup.statusCode).toBe(409);
+    const err = dup.json<{ error: { code: string; executionId: string | null } }>().error;
+    expect(err.code).toBe("DUPLICATE_EXECUTION");
+    expect(err.executionId).toBeNull();
+  });
+
+  it("allows different payloads that share a nonce when digests differ", async () => {
+    const { app } = await createTestHarness({
+      getForwarderDigest: async (input) => `0x${createHash("sha256").update(input.params).digest("hex")}`,
     });
-    expect(conflict.statusCode).toBe(409);
-    expect(conflict.json<{ error: { code: string; executionId: string | null } }>().error.code).toBe("IDEMPOTENCY_CONFLICT");
-    expect(conflict.json<{ error: { executionId: string | null } }>().error.executionId).toBe(first.json<{ id: string }>().id);
+    const first = await buildRelayPayload();
+    const second = await buildRelayPayload({
+      signature: "0x1234",
+      payload: buildClearMacroParams({ nonce: 1n, actionParams: "0x9999" }) as `0x${string}`,
+    });
+    const a = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: first });
+    const b = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: second });
+    expect(a.statusCode).toBe(202);
+    expect(b.statusCode).toBe(202);
+    expect(a.json<{ id: string }>().id).not.toBe(b.json<{ id: string }>().id);
   });
 
   it("rejects invalid signature", async () => {
@@ -60,7 +80,7 @@ describe("API integration", () => {
     expect(response.statusCode).toBe(422);
   });
 
-  it("returns 503 readiness when any enabled chain is not ready", async () => {
+  it("returns 503 readiness when any chain is not ready", async () => {
     const { app } = await createTestHarness({
       getChainReadiness: async () => ({ ready: false, reasonCode: "PROVIDER_NOT_READY" }),
     });
@@ -69,37 +89,44 @@ describe("API integration", () => {
     expect(readyz.json<{ ready: boolean }>().ready).toBe(false);
   });
 
-  it("surfaces confirmation mismatch readiness reason", async () => {
+  it("returns 422 when preflight reverts and force is false", async () => {
     const { app } = await createTestHarness({
-      getChainReadiness: async () => ({ ready: false, reasonCode: "CONFIRMATION_MISMATCH" }),
-    });
-    const readyz = await app.inject({ method: "GET", url: "/readyz" });
-    expect(readyz.statusCode).toBe(503);
-    expect(readyz.json<{ chains: Array<{ reasonCode: string | null }> }>().chains[0]?.reasonCode).toBe("CONFIRMATION_MISMATCH");
-  });
-
-  it("returns idempotent replay even when chain later becomes unready", async () => {
-    let ready = true;
-    const { app } = await createTestHarness({
-      getChainReadiness: async () => (ready ? { ready: true } : { ready: false, reasonCode: "PROVIDER_NOT_READY" }),
+      preflightRunMacro: async () => "deterministic_revert",
     });
     const payload = await buildRelayPayload();
-    const first = await app.inject({
+    const response = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("PREFLIGHT_REVERTED");
+  });
+
+  it("returns 202 pending when preflight reverts and force is true", async () => {
+    const { app } = await createTestHarness({
+      preflightRunMacro: async () => "deterministic_revert",
+    });
+    const response = await app.inject({
       method: "POST",
       url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "sticky-key" },
+      payload: await buildRelayPayload({ forceExecuteAfterPreflightRevert: true }),
     });
-    expect(first.statusCode).toBe(202);
-    ready = false;
-    const replay = await app.inject({
+    expect(response.statusCode).toBe(202);
+    const body = response.json<{ state: string; metadata: Record<string, string> }>();
+    expect(body.state).toBe("pending");
+    expect(body.metadata.forceSubmittedAfterPreflightRevert).toBe("true");
+  });
+
+  it("does not bypass policy when force is true", async () => {
+    const { app } = await createTestHarness({
+      preflightRunMacro: async () => "deterministic_revert",
+    });
+    const response = await app.inject({
       method: "POST",
       url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "sticky-key" },
+      payload: {
+        ...(await buildRelayPayload({ payload: buildClearMacroParams({ provider: "wrong.provider.eth" }) as `0x${string}` })),
+        forceExecuteAfterPreflightRevert: true,
+      },
     });
-    expect(replay.statusCode).toBe(200);
-    expect(replay.json<{ id: string }>().id).toBe(first.json<{ id: string }>().id);
+    expect(response.statusCode).toBe(403);
   });
 
   it("maps schema and malformed body failures to 400 validation error", async () => {
@@ -140,20 +167,6 @@ describe("API integration", () => {
     });
     expect(tooLongValue.statusCode).toBe(400);
     expect(tooLongValue.json<{ error: { code: string } }>().error.code).toBe("VALIDATION_ERROR");
-  });
-
-  it("returns 409 duplicate request for semantic uniqueness conflict", async () => {
-    const { app } = await createTestHarness();
-    const first = await buildRelayPayload();
-    const second = await buildRelayPayload({
-      signature: "0x1234",
-      payload: buildClearMacroParams({ nonce: 1n }) as `0x${string}`,
-    });
-    const accepted = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: first });
-    expect(accepted.statusCode).toBe(202);
-    const duplicate = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: second });
-    expect(duplicate.statusCode).toBe(409);
-    expect(duplicate.json<{ error: { code: string } }>().error.code).toBe("DUPLICATE_EXECUTION");
   });
 
   it("accepts ERC-1271 signer path when signature validator allows it", async () => {
@@ -209,14 +222,14 @@ describe("API integration", () => {
     expect(response.json<{ error: { code: string } }>().error.code).toBe("EXECUTION_NOT_FOUND");
   });
 
-  it("returns dapp-oriented capabilities shape", async () => {
+  it("returns minimal capabilities for dapps", async () => {
     const { app } = await createTestHarness();
     const response = await app.inject({ method: "GET", url: "/v1/capabilities" });
     expect(response.statusCode).toBe(200);
-    const body = response.json<{ relayApi: { endpoint: string; supportsIdempotencyKey: boolean }; chains: Array<{ forwarders: { clearMacroV1: string } }> }>();
-    expect(body.relayApi.endpoint).toBe("/v1/relay-executions");
-    expect(body.relayApi.supportsIdempotencyKey).toBe(true);
-    expect(body.chains[0]?.forwarders.clearMacroV1).toBeDefined();
+    const body = response.json<{ providerName: string; chains: Array<{ chainId: number; forwarderAddress: string }> }>();
+    expect(body.providerName).toBe("macros.superfluid.eth");
+    expect(body.chains[0]?.chainId).toBe(1);
+    expect(body.chains[0]?.forwarderAddress).toMatch(/^0x[0-9a-f]{40}$/);
   });
 
   it("enforces auth token when auth is enabled", async () => {
@@ -247,7 +260,7 @@ describe("API integration", () => {
     expect(response.json<{ error: { code: string } }>().error.code).toBe("CLEAR_MACRO_EXPIRED");
   });
 
-  it("normalizes address case for idempotency hash", async () => {
+  it("canonicalizes addresses into digest dedup key", async () => {
     const { app } = await createTestHarness();
     const payload = await buildRelayPayload();
     const first = await app.inject({
@@ -258,16 +271,20 @@ describe("API integration", () => {
         macroAddress: `0x${payload.macroAddress.slice(2).toUpperCase()}`,
         signerAddress: `0x${payload.signerAddress.slice(2).toUpperCase()}`,
       },
-      headers: { "idempotency-key": "canon-key" },
     });
-    const second = await app.inject({
-      method: "POST",
-      url: "/v1/relay-executions",
-      payload,
-      headers: { "idempotency-key": "canon-key" },
-    });
+    const second = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
     expect(first.statusCode).toBe(202);
     expect(second.statusCode).toBe(200);
     expect(first.json<{ id: string }>().id).toBe(second.json<{ id: string }>().id);
+  });
+
+  it("records audit rows for failed creates", async () => {
+    const { app, db } = await createTestHarness({ validateRelaySignature: async () => false });
+    const payload = await buildRelayPayload();
+    await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    const row = db.db.prepare("SELECT outcome_code FROM create_request_audit_log ORDER BY created_at DESC LIMIT 1").get() as {
+      outcome_code: string;
+    };
+    expect(row.outcome_code).toBe("SIGNATURE_INVALID");
   });
 });

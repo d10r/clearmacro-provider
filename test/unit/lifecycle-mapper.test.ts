@@ -78,5 +78,39 @@ describe("projectRelayerState", () => {
       }).state,
     ).toBe("reverted");
   });
+
+  it("keeps submitted until confirmations finalize", () => {
+    expect(
+      projectRelayerState({
+        status: "mined",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: null,
+        receipt: {
+          transactionHash: `0x${"ab".repeat(32)}`,
+          blockNumber: "1",
+          status: "success",
+        },
+        requiredConfirmations: 3,
+      }).state,
+    ).toBe("submitted");
+  });
+
+  it("succeeds once confirmations are satisfied", () => {
+    expect(
+      projectRelayerState({
+        status: "mined",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: new Date().toISOString(),
+        receipt: {
+          transactionHash: `0x${"ab".repeat(32)}`,
+          blockNumber: "1",
+          status: "success",
+        },
+        requiredConfirmations: 3,
+      }).state,
+    ).toBe("succeeded");
+  });
 });
 

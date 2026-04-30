@@ -36,6 +36,14 @@ export function projectRelayerState(input: RelayerProjectionInput): RelayerProje
     };
   }
 
+  if (input.receipt?.status === "success") {
+    const required = input.requiredConfirmations ?? 1;
+    if (required > 1 && !input.confirmedAt) {
+      return { state: hasHash ? "submitted" : "pending" };
+    }
+    return { state: "succeeded" };
+  }
+
   if (status === "pending" || status === "sent" || status === "submitted") {
     return { state: hasHash ? "submitted" : "pending" };
   }
@@ -43,10 +51,10 @@ export function projectRelayerState(input: RelayerProjectionInput): RelayerProje
     return { state: "submitted" };
   }
   if (status === "mined") {
-    if (input.requiredConfirmations !== null && input.requiredConfirmations > 1 && !input.confirmedAt) {
-      return { state: "included" };
+    if (!input.receipt) {
+      return { state: hasHash ? "submitted" : "pending" };
     }
-    return { state: "succeeded" };
+    return { state: hasHash ? "submitted" : "pending" };
   }
   if (status === "confirmed") {
     return { state: "succeeded" };
@@ -81,4 +89,3 @@ export function projectRelayerState(input: RelayerProjectionInput): RelayerProje
   }
   return { state: hasHash ? "submitted" : "pending" };
 }
-

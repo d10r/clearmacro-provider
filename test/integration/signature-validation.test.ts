@@ -15,40 +15,14 @@ function makeRegistry(rpcUrl: string) {
       chains: [
         {
           chainId: 1,
-          name: "mainnet",
-          enabled: true,
-          ozRelayerId: "relayer-main",
-          rpcs: [{ name: "rpc1", url: rpcUrl }],
-          confirmations: 1,
-          superfluidHost: "0x0000000000000000000000000000000000000009",
-          forwarders: {
-            clearMacroV1: "0x0000000000000000000000000000000000000001",
-            permit2ClearMacroV1: "0x0000000000000000000000000000000000000004",
-          },
-          providers: ["macros.superfluid.eth"],
-          macros: [
-            {
-              address: "0x0000000000000000000000000000000000000002",
-              name: "Macro",
-              enabled: true,
-              supportedKinds: ["clearMacroV1"],
-            },
-          ],
-        },
-      ],
-      clients: [
-        {
-          id: "default",
-          enabled: true,
-          apiTokenHash: null,
-          allowedChains: [1],
-          allowedProviders: ["macros.superfluid.eth"],
-          allowedMacros: ["0x0000000000000000000000000000000000000002"],
+          forwarderAddress: "0x0000000000000000000000000000000000000001",
+          rpcUrls: [rpcUrl],
+          allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
         },
       ],
     }),
   );
-  return loadRegistry({ registryPath, defaultConfirmations: 1 });
+  return loadRegistry(registryPath);
 }
 
 afterEach(() => {

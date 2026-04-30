@@ -48,6 +48,24 @@ export type OzNetwork = {
   required_confirmations: number;
 };
 
+function extractRelayerListPayload(data: unknown): Array<{ id: string }> {
+  if (Array.isArray(data)) {
+    return data.filter((item): item is { id: string } => typeof item === "object" && item !== null && "id" in item && typeof (item as { id: string }).id === "string");
+  }
+  if (data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    for (const key of ["items", "relayers", "data", "results"]) {
+      const value = record[key];
+      if (Array.isArray(value)) {
+        return value.filter(
+          (item): item is { id: string } => typeof item === "object" && item !== null && "id" in item && typeof (item as { id: string }).id === "string",
+        );
+      }
+    }
+  }
+  return [];
+}
+
 export class OzRelayerClient {
   constructor(
     private readonly baseUrl: string,
@@ -80,6 +98,37 @@ export class OzRelayerClient {
   async ready(): Promise<boolean> {
     const response = await this.call<{ ready: boolean }>("/api/v1/ready", { method: "GET" });
     return response.ready === true;
+  }
+
+  /**
+   * Lists relayer ids visible to this API key (paginated best-effort).
+   */
+  async listRelayerIds(): Promise<string[]> {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    let page = 1;
+    const limit = 50;
+    while (true) {
+      const envelope = await this.call<OzEnvelope<unknown>>(`/api/v1/relayers?page=${page}&limit=${limit}`, { method: "GET" });
+      if (!envelope.success || envelope.data === null || envelope.data === undefined) {
+        break;
+      }
+      const batch = extractRelayerListPayload(envelope.data);
+      if (batch.length === 0) {
+        break;
+      }
+      for (const item of batch) {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          ids.push(item.id);
+        }
+      }
+      if (batch.length < limit) {
+        break;
+      }
+      page += 1;
+    }
+    return ids;
   }
 
   async getRelayer(ozRelayerId: string): Promise<RelayerDetails> {

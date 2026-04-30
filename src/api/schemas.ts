@@ -13,6 +13,7 @@ export const CreateRelayExecutionRequestSchema = Type.Object({
   payload: Bytes,
   signature: Bytes,
   value: Type.Optional(UintString),
+  forceExecuteAfterPreflightRevert: Type.Optional(Type.Boolean()),
   clientRequestId: Type.Optional(Type.String()),
   metadata: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
@@ -39,18 +40,10 @@ const RelayExecutionReceiptSchema = Type.Object({
 });
 
 const RelayExecutionTransactionSchema = Type.Object({
-  hash: Type.Optional(Bytes32),
-  hashes: Type.Array(Bytes32),
+  hash: Bytes32,
   from: Type.Optional(Address),
   to: Address,
-  nonce: Type.Optional(UintString),
-  gasLimit: Type.Optional(UintString),
-  gasPrice: Type.Optional(UintString),
-  maxFeePerGas: Type.Optional(UintString),
-  maxPriorityFeePerGas: Type.Optional(UintString),
   submittedAt: Type.Optional(Type.String()),
-  includedAt: Type.Optional(Type.String()),
-  confirmedAt: Type.Optional(Type.String()),
 });
 
 export const RelayExecutionResponseSchema = Type.Object({
@@ -64,14 +57,13 @@ export const RelayExecutionResponseSchema = Type.Object({
   forwarderAddress: Address,
   macroAddress: Address,
   signerAddress: Address,
-  provider: Type.String(),
   nonce: UintString,
   validity: Type.Object({
     validAfter: UintString,
     validBefore: UintString,
   }),
   value: UintString,
-  transaction: RelayExecutionTransactionSchema,
+  transaction: Type.Optional(RelayExecutionTransactionSchema),
   receipt: Type.Optional(RelayExecutionReceiptSchema),
   error: Type.Optional(RelayExecutionErrorSchema),
   timestamps: Type.Object({
@@ -88,6 +80,16 @@ export const RelayExecutionEventsResponseSchema = Type.Intersect([
   RelayExecutionResponseSchema,
   Type.Object({ events: Type.Optional(Type.Array(Type.Any())) }),
 ]);
+
+export const CapabilitiesResponseSchema = Type.Object({
+  providerName: Type.String(),
+  chains: Type.Array(
+    Type.Object({
+      chainId: Type.Integer({ minimum: 1 }),
+      forwarderAddress: Address,
+    }),
+  ),
+});
 
 export const ErrorBodySchema = Type.Object({
   error: Type.Object({

@@ -3,40 +3,14 @@
   "chains": [
     {
       "chainId": 8453,
-      "name": "base-mainnet",
-      "enabled": false,
-      "ozRelayerId": "base-mainnet-relayer",
-      "rpcs": [
+      "forwarderAddress": "0x0000000000000000000000000000000000000000",
+      "rpcUrls": ["https://example.invalid"],
+      "allowedMacros": [
         {
-          "name": "example",
-          "url": "https://example.invalid"
-        }
-      ],
-      "confirmations": 1,
-      "superfluidHost": "0x0000000000000000000000000000000000000000",
-      "forwarders": {
-        "clearMacroV1": "0x0000000000000000000000000000000000000000",
-        "permit2ClearMacroV1": "0x0000000000000000000000000000000000000000"
-      },
-      "providers": ["macros.superfluid.eth"],
-      "macros": [
-        {
-          "address": "0x0000000000000000000000000000000000000000",
-          "name": "ExampleMacro",
-          "enabled": false,
-          "supportedKinds": ["clearMacroV1"]
+          "domain": "macros.superfluid.eth",
+          "address": "0x0000000000000000000000000000000000000000"
         }
       ]
-    }
-  ],
-  "clients": [
-    {
-      "id": "default",
-      "enabled": true,
-      "apiTokenHash": null,
-      "allowedChains": [8453],
-      "allowedProviders": ["macros.superfluid.eth"],
-      "allowedMacros": ["0x0000000000000000000000000000000000000000"]
     }
   ]
 }

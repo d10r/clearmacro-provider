@@ -34,19 +34,25 @@ function isRpcUnavailableError(error: unknown): boolean {
   );
 }
 
+function rpcEntries(chain: RegistryChain): { name: string; url: string }[] {
+  const urls = chain.rpcUrls ?? [];
+  return urls.map((url, index) => ({ name: `rpc-${index}`, url }));
+}
+
 function createClients(chain: RegistryChain): { name: string; client: PublicClient }[] {
-  return chain.rpcs.map((rpc) => ({
+  return rpcEntries(chain).map((rpc) => ({
     name: rpc.name,
     client: createPublicClient({ transport: http(rpc.url) }),
   }));
 }
 
-export async function withRpcFallback<T>(
-  chain: RegistryChain,
-  fn: (client: PublicClient, rpcName: string) => Promise<T>,
-): Promise<T> {
+export async function withRpcFallback<T>(chain: RegistryChain, fn: (client: PublicClient, rpcName: string) => Promise<T>): Promise<T> {
+  const entries = createClients(chain);
+  if (entries.length === 0) {
+    throw new Error("No RPC endpoints configured for chain");
+  }
   let lastError: Error | undefined;
-  for (const entry of createClients(chain)) {
+  for (const entry of entries) {
     try {
       return await fn(entry.client, entry.name);
     } catch (error) {
@@ -113,10 +119,14 @@ export async function evaluateChainReadiness(input: {
   registry: LoadedRegistry;
   chainId: number;
   relayerClient: OzRelayerClient;
-}): Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }> {
+}): Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }> {
   const chain = input.registry.chainsById.get(input.chainId);
-  if (!chain || !chain.enabled) {
+  if (!chain) {
     return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
+  }
+  const relayerId = input.registry.relayerIdByChainId.get(input.chainId);
+  if (!relayerId) {
+    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
   let relayerReady = false;
   try {
@@ -129,7 +139,7 @@ export async function evaluateChainReadiness(input: {
   }
   let relayer: { address: string; paused: boolean; system_disabled: boolean; network?: string | null; network_type?: string | null };
   try {
-    relayer = await input.relayerClient.getRelayer(chain.ozRelayerId);
+    relayer = await input.relayerClient.getRelayer(relayerId);
   } catch {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
@@ -138,10 +148,7 @@ export async function evaluateChainReadiness(input: {
   }
   if (relayer.network_type && relayer.network) {
     try {
-      const network = await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
-      if (network.required_confirmations !== chain.confirmations) {
-        return { ready: false, reasonCode: "CONFIRMATION_MISMATCH" };
-      }
+      await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
     } catch {
       return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
     }
@@ -155,6 +162,23 @@ export async function evaluateChainReadiness(input: {
   } catch {
     return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
   }
+}
+
+export async function fetchRelayerRequiredConfirmations(input: {
+  registry: LoadedRegistry;
+  chainId: number;
+  relayerClient: OzRelayerClient;
+}): Promise<number | null> {
+  const relayerId = input.registry.relayerIdByChainId.get(input.chainId);
+  if (!relayerId) {
+    return null;
+  }
+  const relayer = await input.relayerClient.getRelayer(relayerId);
+  if (!relayer.network_type || !relayer.network) {
+    return null;
+  }
+  const network = await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
+  return network.required_confirmations ?? null;
 }
 
 export async function validateRelaySignature(input: {

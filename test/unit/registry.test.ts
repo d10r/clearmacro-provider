@@ -15,43 +15,17 @@ describe("loadRegistry", () => {
         chains: [
           {
             chainId: 1,
-            name: "mainnet",
-            enabled: true,
-            ozRelayerId: "main",
-            rpcs: [{ name: "rpc1", url: "http://localhost" }],
-            superfluidHost: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            forwarders: {
-              clearMacroV1: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-              permit2ClearMacroV1: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
-            },
-            providers: ["macros.superfluid.eth"],
-            macros: [
-              {
-                address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
-                name: "Macro",
-                enabled: true,
-                supportedKinds: ["clearMacroV1"],
-              },
-            ],
-          },
-        ],
-        clients: [
-          {
-            id: "default",
-            enabled: true,
-            apiTokenHash: null,
-            allowedChains: [1],
-            allowedProviders: ["macros.superfluid.eth"],
-            allowedMacros: ["0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],
+            forwarderAddress: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            rpcUrls: ["http://localhost"],
+            allowedMacros: [{ domain: "MacroDomain", address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" }],
           },
         ],
       }),
     );
 
-    const registry = loadRegistry({ registryPath: file, defaultConfirmations: 2 });
+    const registry = loadRegistry(file);
     const chain = registry.chainsById.get(1);
-    expect(chain?.forwarders.clearMacroV1).toBe("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    expect(chain?.confirmations).toBe(2);
+    expect(chain?.forwarderAddress).toBe("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(chain?.allowedMacros[0]?.address).toBe("0xdddddddddddddddddddddddddddddddddddddddd");
   });
 });
-

@@ -36,14 +36,51 @@ function parseInteger(name: string, fallback: number, min = 0): number {
   return parsed;
 }
 
+export type ApiClientRecord = { id: string; apiTokenHash: string };
+
+function parseApiClientsJson(): ApiClientRecord[] {
+  const raw = process.env.API_CLIENTS_JSON;
+  if (!raw || raw.trim().length === 0) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("Invalid JSON in API_CLIENTS_JSON");
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("API_CLIENTS_JSON must be a non-empty JSON array when provided");
+  }
+  const out: ApiClientRecord[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("API_CLIENTS_JSON entries must be objects");
+    }
+    const id = (entry as { id?: unknown }).id;
+    const apiTokenHash = (entry as { apiTokenHash?: unknown }).apiTokenHash;
+    if (typeof id !== "string" || id.length === 0 || typeof apiTokenHash !== "string" || apiTokenHash.length === 0) {
+      throw new Error("API_CLIENTS_JSON entries require string id and apiTokenHash");
+    }
+    out.push({ id, apiTokenHash: apiTokenHash.toLowerCase() });
+  }
+  return out;
+}
+
 export type AppEnv = ReturnType<typeof loadEnv>;
 
 export function loadEnv() {
+  const apiAuthEnabled = parseBoolean("API_AUTH_ENABLED", false);
+  const apiClients = apiAuthEnabled ? parseApiClientsJson() : [];
+  if (apiAuthEnabled && apiClients.length === 0) {
+    throw new Error("API_AUTH_ENABLED requires non-empty API_CLIENTS_JSON");
+  }
   return {
     databasePath: requireString("DATABASE_PATH"),
     ozRelayerUrl: requireString("OZ_RELAYER_URL"),
     ozRelayerApiKey: requireString("OZ_RELAYER_API_KEY"),
     registryPath: process.env.REGISTRY_PATH ?? "config/registry.json",
+    providerName: requireString("PROVIDER_NAME"),
     host: process.env.HOST ?? "0.0.0.0",
     port: parseInteger("PORT", 3000, 1),
     logLevel: (process.env.LOG_LEVEL ?? "info") as
@@ -57,8 +94,8 @@ export function loadEnv() {
     relayerWorkerEnabled: parseBoolean("RELAYER_WORKER_ENABLED", true),
     relayerWorkerPollIntervalMs: parseInteger("RELAYER_WORKER_POLL_INTERVAL_MS", 2000, 1),
     relayerWorkerBatchSize: parseInteger("RELAYER_WORKER_BATCH_SIZE", 25, 1),
-    apiAuthEnabled: parseBoolean("API_AUTH_ENABLED", false),
-    defaultConfirmations: parseInteger("DEFAULT_CONFIRMATIONS", 1, 1),
+    apiAuthEnabled,
+    apiClients,
     requestMaxMetadataKeys: parseInteger("REQUEST_MAX_METADATA_KEYS", 20, 0),
     requestMaxMetadataValueLength: parseInteger("REQUEST_MAX_METADATA_VALUE_LENGTH", 256, 1),
     relayerRequestTimeoutMs: parseInteger("RELAYER_REQUEST_TIMEOUT_MS", 10_000, 1),

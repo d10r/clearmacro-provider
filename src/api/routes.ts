@@ -1,57 +1,74 @@
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
-import { CreateRelayExecutionRequestSchema, ErrorBodySchema, RelayExecutionEventsResponseSchema, RelayExecutionResponseSchema } from "./schemas.js";
+import {
+  CapabilitiesResponseSchema,
+  CreateRelayExecutionRequestSchema,
+  ErrorBodySchema,
+  RelayExecutionEventsResponseSchema,
+  RelayExecutionResponseSchema,
+} from "./schemas.js";
 import { ApiError, toErrorBody } from "./errors.js";
 import type { LoadedRegistry } from "../config/registry.js";
 import { decodeClearMacroPayload } from "../validation/clearmacro.js";
-import { validateRegistryPolicy } from "../validation/registry.js";
-import type { RelayExecutionRepository, RelayExecutionEventRepository, RelayerTransactionRepository, RelayExecutionRow } from "../db/repositories.js";
+import { assertMacroAllowed } from "../validation/registry.js";
+import type {
+  CreateRequestAuditLogRepository,
+  RelayExecutionEventRepository,
+  RelayExecutionRepository,
+  RelayExecutionRow,
+  RelayerTransactionRepository,
+} from "../db/repositories.js";
 import { projectRelayerState } from "../relayer/mapper.js";
+import type { OzRelayerClient } from "../relayer/client.js";
+import { hashCanonicalCreateBody } from "./canonicalBody.js";
+import { preflightRunMacro, fetchRelayerRequiredConfirmations } from "../chain/readiness.js";
+import type { RegistryChain } from "../config/schema.js";
 
-type RegisterRoutesDeps = {
+export type RegisterRoutesDeps = {
   registry: LoadedRegistry;
   executions: RelayExecutionRepository;
   executionEvents: RelayExecutionEventRepository;
   relayerTransactions: RelayerTransactionRepository;
+  createRequestAudit: CreateRequestAuditLogRepository;
+  providerName: string;
+  relayerClient: OzRelayerClient;
   apiAuthEnabled: boolean;
+  resolveClientIdFromBearer: (bearerToken: string) => string | null;
   requestMaxMetadataKeys: number;
   requestMaxMetadataValueLength: number;
-  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }>;
+  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }>;
   getForwarderDigest: (input: { chainId: number; forwarder: string; macro: string; params: string }) => Promise<string>;
   validateRelaySignature: (input: { chainId: number; signer: string; digest: string; signature: string }) => Promise<boolean>;
+  /** Test override hook; defaults to real `preflightRunMacro`. */
+  preflightRunMacro?: (input: {
+    chain: RegistryChain;
+    forwarder: string;
+    macro: string;
+    params: string;
+    signer: string;
+    relayerSigner: string;
+    signature: string;
+    msgValue: string;
+  }) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
 };
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function normalizeCreateBody(body: {
-  chainId: number;
-  macroAddress: string;
-  signerAddress: string;
-  payload: string;
-  signature: string;
-  value?: string;
-  clientRequestId?: string;
-  metadata?: Record<string, string>;
-}): string {
-  return JSON.stringify({
-    kind: "clearMacroV1",
-    chainId: body.chainId,
-    macroAddress: body.macroAddress.toLowerCase(),
-    signerAddress: body.signerAddress.toLowerCase(),
-    payload: body.payload,
-    signature: body.signature,
-    value: body.value ?? "0",
-    clientRequestId: body.clientRequestId ?? null,
-    metadata: Object.fromEntries(Object.entries(body.metadata ?? {}).sort(([a], [b]) => a.localeCompare(b))),
-  });
-}
-
 function toRelayExecutionResponse(row: RelayExecutionRow, relayer: ReturnType<RelayerTransactionRepository["getByExecutionId"]>) {
-  const hashes = JSON.parse(row.transactionHashesJson) as `0x${string}`[];
   const receipt = row.receiptJson ? (JSON.parse(row.receiptJson) as RelayExecutionRow["receiptJson"] extends string ? never : never) : undefined;
-  const error = row.lastErrorJson ? (JSON.parse(row.lastErrorJson) as { code: string; message: string; category: "user" | "provider" | "chain" | "relayer" | "unknown"; retryable: boolean }) : undefined;
+  const error = row.lastErrorJson
+    ? (JSON.parse(row.lastErrorJson) as { code: string; message: string; category: "user" | "provider" | "chain" | "relayer" | "unknown"; retryable: boolean })
+    : undefined;
+  const transaction =
+    row.currentTransactionHash !== null
+      ? {
+          hash: row.currentTransactionHash as `0x${string}`,
+          to: row.forwarderAddress as `0x${string}`,
+          submittedAt: relayer?.submittedAt ?? undefined,
+        }
+      : undefined;
   return {
     id: row.id,
     state: row.state,
@@ -63,35 +80,25 @@ function toRelayExecutionResponse(row: RelayExecutionRow, relayer: ReturnType<Re
     forwarderAddress: row.forwarderAddress as `0x${string}`,
     macroAddress: row.macroAddress as `0x${string}`,
     signerAddress: row.signerAddress as `0x${string}`,
-    provider: row.provider,
     nonce: row.nonce,
     validity: {
       validAfter: row.validAfter,
       validBefore: row.validBefore,
     },
     value: row.value,
-    transaction: {
-      hash: row.currentTransactionHash ?? undefined,
-      hashes,
-      from: undefined,
-      to: row.forwarderAddress as `0x${string}`,
-      nonce: relayer?.nonce ?? undefined,
-      gasLimit: relayer?.gasLimit ?? undefined,
-      gasPrice: relayer?.gasPrice ?? undefined,
-      maxFeePerGas: relayer?.maxFeePerGas ?? undefined,
-      maxPriorityFeePerGas: relayer?.maxPriorityFeePerGas ?? undefined,
-      submittedAt: relayer?.submittedAt ?? undefined,
-      includedAt: relayer?.includedAt ?? undefined,
-      confirmedAt: relayer?.confirmedAt ?? undefined,
-    },
-    receipt: receipt as {
-      transactionHash: `0x${string}`;
-      blockNumber: string;
-      blockHash?: `0x${string}`;
-      status: "success" | "reverted";
-      gasUsed?: string;
-    } | undefined,
-    error,
+    ...(transaction ? { transaction } : {}),
+    ...(receipt
+      ? {
+          receipt: receipt as {
+            transactionHash: `0x${string}`;
+            blockNumber: string;
+            blockHash?: `0x${string}`;
+            status: "success" | "reverted";
+            gasUsed?: string;
+          },
+        }
+      : {}),
+    ...(error ? { error } : {}),
     timestamps: {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -103,17 +110,21 @@ function toRelayExecutionResponse(row: RelayExecutionRow, relayer: ReturnType<Re
   };
 }
 
+function isSqliteUniqueConstraint(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("SQLITE_CONSTRAINT") || message.includes("UNIQUE constraint failed");
+}
+
 export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesDeps): Promise<void> {
+  const preflight = deps.preflightRunMacro ?? preflightRunMacro;
+
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) {
       reply.status(error.statusCode).send(toErrorBody(error));
       return;
     }
     const maybeFastifyError = error as { validation?: unknown; code?: string; statusCode?: number };
-    if (
-      maybeFastifyError.validation !== undefined ||
-      maybeFastifyError.code === "FST_ERR_CTP_INVALID_JSON_BODY"
-    ) {
+    if (maybeFastifyError.validation !== undefined || maybeFastifyError.code === "FST_ERR_CTP_INVALID_JSON_BODY") {
       reply.status(400).send(toErrorBody(new ApiError(400, "VALIDATION_ERROR", "Request validation failed.", "validation", false)));
       return;
     }
@@ -123,9 +134,9 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
 
   app.get("/healthz", async () => ({ ok: true }));
   app.get("/readyz", async (_request, reply) => {
-    const enabledChains = deps.registry.raw.chains.filter((chain) => chain.enabled);
+    const chains = deps.registry.raw.chains;
     const checks = await Promise.all(
-      enabledChains.map(async (chain) => ({
+      chains.map(async (chain) => ({
         chainId: chain.chainId,
         result: await deps.getChainReadiness(chain.chainId),
       })),
@@ -170,37 +181,52 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         payload: string;
         signature: string;
         value?: string;
+        forceExecuteAfterPreflightRevert?: boolean;
         clientRequestId?: string;
         metadata?: Record<string, string>;
       };
-      const requestBodyHash = sha256(normalizeCreateBody(body));
-      const idempotencyKey = request.headers["idempotency-key"];
 
-      const authHeader = request.headers.authorization;
       const clientId = deps.apiAuthEnabled
         ? (() => {
+            const authHeader = request.headers.authorization;
             if (!authHeader?.startsWith("Bearer ")) {
               throw new ApiError(401, "UNAUTHORIZED", "Missing bearer token.", "auth", false);
             }
-            const tokenHash = sha256(authHeader.slice("Bearer ".length));
-            const client = deps.registry.raw.clients.find((c) => c.apiTokenHash === tokenHash);
-            if (!client || !client.enabled) {
+            const token = authHeader.slice("Bearer ".length);
+            const resolved = deps.resolveClientIdFromBearer(token);
+            if (!resolved) {
               throw new ApiError(401, "UNAUTHORIZED", "Invalid API token.", "auth", false);
             }
-            return client.id;
+            return resolved;
           })()
         : "anonymous";
 
-      if (typeof idempotencyKey === "string") {
-        const existing = deps.executions.findByClientIdempotency(clientId, idempotencyKey);
-        if (existing) {
-          if (existing.requestBodyHash !== requestBodyHash) {
-            throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with different body.", "validation", false, existing.id);
-          }
-          reply.code(200);
-          return toRelayExecutionResponse(existing, deps.relayerTransactions.getByExecutionId(existing.id));
-        }
-      }
+      const requestBodyHash = hashCanonicalCreateBody({
+        kind: body.kind,
+        chainId: body.chainId,
+        macroAddress: body.macroAddress,
+        signerAddress: body.signerAddress,
+        payload: body.payload,
+        signature: body.signature,
+        value: body.value ?? "0",
+        forceExecuteAfterPreflightRevert: body.forceExecuteAfterPreflightRevert ?? false,
+        clientRequestId: body.clientRequestId ?? null,
+        metadata: body.metadata ?? {},
+      });
+
+      const auditBase = {
+        clientId,
+        requestBodyHash,
+        chainId: body.chainId as number | null,
+        kind: body.kind as string | null,
+        forwarderAddress: null as string | null,
+        domain: null as string | null,
+        macroAddress: body.macroAddress.toLowerCase(),
+        signerAddress: body.signerAddress.toLowerCase(),
+        providerName: deps.providerName,
+        nonce: null as string | null,
+        digest: null as string | null,
+      };
 
       if (body.kind !== "clearMacroV1") {
         throw new ApiError(400, "UNSUPPORTED_RELAY_KIND", "Only clearMacroV1 is enabled in v1.", "validation", false);
@@ -208,16 +234,25 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
 
       const chainConfig = deps.registry.chainsById.get(body.chainId);
       if (!chainConfig) {
+        deps.createRequestAudit.append({
+          ...auditBase,
+          outcomeCode: "CHAIN_NOT_ALLOWED",
+          executionId: null,
+          chainId: body.chainId,
+        });
         throw new ApiError(403, "CHAIN_NOT_ALLOWED", "Unsupported chain.", "validation", false);
       }
-      const forwarderAddress = chainConfig.forwarders[body.kind].toLowerCase();
+      const forwarderAddress = chainConfig.forwarderAddress;
+      auditBase.forwarderAddress = forwarderAddress;
 
-      const metadata = body.metadata ?? {};
+      const metadata = { ...(body.metadata ?? {}) };
       if (Object.keys(metadata).length > deps.requestMaxMetadataKeys) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "VALIDATION_ERROR", executionId: null });
         throw new ApiError(400, "VALIDATION_ERROR", "Too many metadata keys.", "validation", false);
       }
       for (const value of Object.values(metadata)) {
         if (value.length > deps.requestMaxMetadataValueLength) {
+          deps.createRequestAudit.append({ ...auditBase, outcomeCode: "VALIDATION_ERROR", executionId: null });
           throw new ApiError(400, "VALIDATION_ERROR", "Metadata value too long.", "validation", false);
         }
       }
@@ -226,39 +261,43 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
       try {
         decoded = decodeClearMacroPayload(body.payload);
       } catch {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "INVALID_CLEAR_MACRO_PAYLOAD", executionId: null });
         throw new ApiError(422, "INVALID_CLEAR_MACRO_PAYLOAD", "Payload is not valid ABI-encoded clear macro payload.", "user", false);
       }
+      auditBase.domain = decoded.domain;
+      auditBase.nonce = decoded.nonce.toString();
       if (decoded.macroContract !== body.macroAddress.toLowerCase()) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "INVALID_CLEAR_MACRO_PAYLOAD", executionId: null });
         throw new ApiError(422, "INVALID_CLEAR_MACRO_PAYLOAD", "Macro mismatch in payload.", "user", false);
       }
-      if (decoded.provider === "self") {
-        throw new ApiError(403, "PROVIDER_NOT_ALLOWED", "Provider self is not allowed.", "validation", false);
+      if (decoded.provider !== deps.providerName) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "PROVIDER_NOT_ALLOWED", executionId: null });
+        throw new ApiError(403, "PROVIDER_NOT_ALLOWED", "Payload provider does not match deployment provider name.", "validation", false);
       }
 
       const now = BigInt(Math.floor(Date.now() / 1000));
       if (decoded.validBefore !== 0n && decoded.validBefore <= now) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "CLEAR_MACRO_EXPIRED", executionId: null });
         throw new ApiError(422, "CLEAR_MACRO_EXPIRED", "Request has expired.", "user", false);
       }
       if (decoded.validAfter > now) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "CLEAR_MACRO_NOT_YET_VALID", executionId: null });
         throw new ApiError(422, "CLEAR_MACRO_NOT_YET_VALID", "Request is not valid yet.", "user", true);
       }
 
-      const policy = validateRegistryPolicy(deps.registry, {
+      const macroPolicy = assertMacroAllowed(deps.registry, {
         chainId: body.chainId,
-        kind: body.kind,
-        forwarder: forwarderAddress,
-        macro: body.macroAddress,
-        provider: decoded.provider,
-        clientId,
-        apiAuthEnabled: deps.apiAuthEnabled,
+        domain: decoded.domain,
+        macroAddress: body.macroAddress,
       });
-      if (!policy.ok) {
-        const status = policy.code === "CHAIN_NOT_ALLOWED" || policy.code === "MACRO_NOT_ALLOWED" || policy.code === "PROVIDER_NOT_ALLOWED" ? 403 : 400;
-        throw new ApiError(status, policy.code, policy.message, "validation", false);
+      if (!macroPolicy.ok) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "MACRO_NOT_ALLOWED", executionId: null });
+        throw new ApiError(403, macroPolicy.code, macroPolicy.message, "validation", false);
       }
 
       const readiness = await deps.getChainReadiness(body.chainId);
       if (!readiness.ready) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null });
         throw new ApiError(503, readiness.reasonCode ?? "PROVIDER_NOT_READY", "Requested chain is not ready.", "provider", true);
       }
 
@@ -271,8 +310,32 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
           params: body.payload,
         });
       } catch {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "CHAIN_UNAVAILABLE", executionId: null, digest: null });
         throw new ApiError(503, "CHAIN_UNAVAILABLE", "Unable to read ClearMacro digest from app RPCs.", "chain", true);
       }
+      auditBase.digest = digest;
+
+      const existingByDigest = deps.executions.findByDedupKey(body.chainId, forwarderAddress, body.signerAddress.toLowerCase(), digest);
+      if (existingByDigest) {
+        if (existingByDigest.clientId === clientId) {
+          deps.createRequestAudit.append({
+            ...auditBase,
+            outcomeCode: "DUPLICATE_REPLAYED",
+            executionId: existingByDigest.id,
+            digest,
+          });
+          reply.code(200);
+          return toRelayExecutionResponse(existingByDigest, deps.relayerTransactions.getByExecutionId(existingByDigest.id));
+        }
+        deps.createRequestAudit.append({
+          ...auditBase,
+          outcomeCode: "DUPLICATE_HIDDEN",
+          executionId: null,
+          digest,
+        });
+        throw new ApiError(409, "DUPLICATE_EXECUTION", "A matching execution already exists for another caller.", "validation", false, null);
+      }
+
       let validSignature: boolean;
       try {
         validSignature = await deps.validateRelaySignature({
@@ -282,26 +345,80 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
           signature: body.signature,
         });
       } catch {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "CHAIN_UNAVAILABLE", executionId: null, digest });
         throw new ApiError(503, "CHAIN_UNAVAILABLE", "Unable to validate signature with app RPCs.", "chain", true);
       }
       if (!validSignature) {
-        throw new ApiError(422, "SIGNATURE_INVALID", "EOA signature validation failed.", "user", false);
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "SIGNATURE_INVALID", executionId: null, digest });
+        throw new ApiError(422, "SIGNATURE_INVALID", "Signature validation failed for digest and signer.", "user", false);
       }
 
-      let inserted;
+      const ozRelayerId = deps.registry.relayerIdByChainId.get(body.chainId);
+      if (!ozRelayerId) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null, digest });
+        throw new ApiError(503, "RELAYER_UNAVAILABLE", "Relayer is not bound for this chain.", "relayer", true);
+      }
+
+      let relayerSigner: string;
       try {
-        inserted = deps.executions.createAccepted({
+        const relayerDetails = await deps.relayerClient.getRelayer(ozRelayerId);
+        relayerSigner = relayerDetails.address;
+      } catch {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null, digest });
+        throw new ApiError(503, "RELAYER_UNAVAILABLE", "Unable to load relayer signer for preflight.", "relayer", true);
+      }
+
+      const preflightResult = await preflight({
+        chain: chainConfig,
+        forwarder: forwarderAddress,
+        macro: body.macroAddress.toLowerCase(),
+        params: body.payload,
+        signer: body.signerAddress.toLowerCase(),
+        relayerSigner,
+        signature: body.signature,
+        msgValue: body.value ?? "0",
+      });
+      if (preflightResult === "rpc_unavailable") {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "CHAIN_UNAVAILABLE", executionId: null, digest });
+        throw new ApiError(503, "CHAIN_UNAVAILABLE", "Unable to run preflight simulation on app RPCs.", "chain", true);
+      }
+      const forceRequested = body.forceExecuteAfterPreflightRevert === true;
+      if (preflightResult === "deterministic_revert" && !forceRequested) {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "PREFLIGHT_REVERTED", executionId: null, digest });
+        throw new ApiError(422, "PREFLIGHT_REVERTED", "Preflight simulation predicts revert.", "user", false);
+      }
+      if (preflightResult === "deterministic_revert" && forceRequested) {
+        metadata.forceSubmittedAfterPreflightRevert = "true";
+      }
+
+      let requiredConfirmations: number | null;
+      try {
+        requiredConfirmations = await fetchRelayerRequiredConfirmations({
+          registry: deps.registry,
+          chainId: body.chainId,
+          relayerClient: deps.relayerClient,
+        });
+      } catch {
+        deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null, digest });
+        throw new ApiError(503, "RELAYER_UNAVAILABLE", "Unable to read relayer network finality policy.", "relayer", true);
+      }
+
+      const forceAfterPreflightRevert = preflightResult === "deterministic_revert" && forceRequested ? 1 : 0;
+
+      let inserted: RelayExecutionRow;
+      try {
+        inserted = deps.executions.createPending({
           clientId,
           clientRequestId: body.clientRequestId ?? null,
-          idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
           requestBodyHash,
+          digest,
+          domain: decoded.domain,
           kind: body.kind,
           chainId: body.chainId,
-          ozRelayerId: policy.ozRelayerId,
+          ozRelayerId,
           forwarderAddress,
           macroAddress: body.macroAddress.toLowerCase(),
           signerAddress: body.signerAddress.toLowerCase(),
-          provider: decoded.provider,
           nonce: decoded.nonce.toString(),
           validAfter: decoded.validAfter.toString(),
           validBefore: decoded.validBefore.toString(),
@@ -310,24 +427,47 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
           signature: body.signature,
           permit2Json: null,
           metadataJson: JSON.stringify(metadata),
-          requiredConfirmations: policy.confirmations,
+          forceAfterPreflightRevert,
+          requiredConfirmations,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (message.includes("relay_executions_semantic_uniq") || message.includes("relay_executions.chain_id")) {
-          throw new ApiError(409, "DUPLICATE_EXECUTION", "A matching execution already exists.", "validation", false);
-        }
-        if (message.includes("relay_executions_client_idempotency_uniq") || message.includes("relay_executions.client_id")) {
-          const existing = typeof idempotencyKey === "string" ? deps.executions.findByClientIdempotency(clientId, idempotencyKey) : undefined;
-          throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key conflict.", "validation", false, existing?.id ?? null);
+        if (isSqliteUniqueConstraint(error)) {
+          const raced = deps.executions.findByDedupKey(body.chainId, forwarderAddress, body.signerAddress.toLowerCase(), digest);
+          if (raced) {
+            if (raced.clientId === clientId) {
+              deps.createRequestAudit.append({
+                ...auditBase,
+                outcomeCode: "DUPLICATE_REPLAYED",
+                executionId: raced.id,
+                digest,
+              });
+              reply.code(200);
+              return toRelayExecutionResponse(raced, deps.relayerTransactions.getByExecutionId(raced.id));
+            }
+            deps.createRequestAudit.append({
+              ...auditBase,
+              outcomeCode: "DUPLICATE_HIDDEN",
+              executionId: null,
+              digest,
+            });
+            throw new ApiError(409, "DUPLICATE_EXECUTION", "A matching execution already exists for another caller.", "validation", false, null);
+          }
         }
         throw error;
       }
+
+      deps.createRequestAudit.append({
+        ...auditBase,
+        outcomeCode: "CREATED",
+        executionId: inserted.id,
+        digest,
+      });
+
       deps.executionEvents.append({
         executionId: inserted.id,
         type: "state_changed",
         actor: "api",
-        reason: "Execution accepted after synchronous validation",
+        reason: "Execution created after synchronous validation",
         detailsJson: JSON.stringify({ chainId: inserted.chainId, kind: inserted.kind }),
       });
 
@@ -374,25 +514,25 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
     },
   );
 
-  app.get("/v1/capabilities", async () => {
-    return {
-      service: { name: "clearmacro-provider", version: "0.1.0" },
-      relayApi: {
-        endpoint: "/v1/relay-executions",
-        supportedKinds: ["clearMacroV1"],
-        states: ["accepted", "pending", "submitted", "included", "succeeded", "reverted", "rejected", "failed", "expired", "canceled"],
-        supportsIdempotencyKey: true,
-        supportsWaitEndpoint: false,
-      },
+  app.get(
+    "/v1/capabilities",
+    {
+      schema: { response: { 200: CapabilitiesResponseSchema } },
+    },
+    async () => ({
+      providerName: deps.providerName,
       chains: deps.registry.raw.chains.map((chain) => ({
         chainId: chain.chainId,
-        name: chain.name,
-        enabled: chain.enabled,
-        ready: true,
-        forwarders: { clearMacroV1: chain.forwarders.clearMacroV1 },
-        providers: chain.providers,
-        macros: chain.macros.map((m) => ({ address: m.address, name: m.name, enabled: m.enabled, supportedKinds: m.supportedKinds })),
+        forwarderAddress: chain.forwarderAddress as `0x${string}`,
       })),
-    };
-  });
+    }),
+  );
+}
+
+export function buildBearerResolver(apiClients: { apiTokenHash: string; id: string }[]): (rawToken: string) => string | null {
+  const map = new Map(apiClients.map((c) => [c.apiTokenHash.toLowerCase(), c.id]));
+  return (rawToken: string) => {
+    const hash = sha256(rawToken).toLowerCase();
+    return map.get(hash) ?? null;
+  };
 }

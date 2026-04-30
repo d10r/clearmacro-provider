@@ -23,40 +23,16 @@ function makeRegistry(rpcUrl: string) {
       chains: [
         {
           chainId: 1,
-          name: "mainnet",
-          enabled: true,
-          ozRelayerId: "relayer-main",
-          rpcs: [{ name: "rpc1", url: rpcUrl }],
-          confirmations: 1,
-          superfluidHost: "0x0000000000000000000000000000000000000009",
-          forwarders: {
-            clearMacroV1: "0x0000000000000000000000000000000000000001",
-            permit2ClearMacroV1: "0x0000000000000000000000000000000000000004",
-          },
-          providers: ["macros.superfluid.eth"],
-          macros: [
-            {
-              address: "0x0000000000000000000000000000000000000002",
-              name: "Macro",
-              enabled: true,
-              supportedKinds: ["clearMacroV1"],
-            },
-          ],
-        },
-      ],
-      clients: [
-        {
-          id: "default",
-          enabled: true,
-          apiTokenHash: null,
-          allowedChains: [1],
-          allowedProviders: ["macros.superfluid.eth"],
-          allowedMacros: ["0x0000000000000000000000000000000000000002"],
+          forwarderAddress: "0x0000000000000000000000000000000000000001",
+          rpcUrls: [rpcUrl],
+          allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
         },
       ],
     }),
   );
-  return loadRegistry({ registryPath, defaultConfirmations: 1 });
+  const registry = loadRegistry(registryPath);
+  registry.relayerIdByChainId.set(1, "relayer-main");
+  return registry;
 }
 
 describe("chain readiness matrix", () => {
@@ -121,7 +97,36 @@ describe("chain readiness matrix", () => {
     expect(readiness).toEqual({ ready: false, reasonCode: "RELAYER_UNAVAILABLE" });
   });
 
-  it("returns PROVIDER_NOT_READY for missing/disabled chain configuration", async () => {
+  it("returns RELAYER_UNAVAILABLE when chain is not bound to a relayer id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ready-unbound-"));
+    const registryPath = join(dir, "registry.json");
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0x0000000000000000000000000000000000000001",
+            rpcUrls: ["http://rpc.test"],
+            allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+          },
+        ],
+      }),
+    );
+    const registry = loadRegistry(registryPath);
+    const readiness = await evaluateChainReadiness({
+      registry,
+      chainId: 1,
+      relayerClient: {
+        ready: async () => true,
+        getRelayer: async () => ({ address: "0x00000000000000000000000000000000000000aa", paused: false, system_disabled: false }),
+      } as never,
+    });
+    expect(readiness).toEqual({ ready: false, reasonCode: "RELAYER_UNAVAILABLE" });
+  });
+
+  it("returns PROVIDER_NOT_READY for missing chain configuration", async () => {
     const registry = makeRegistry("http://rpc.test");
     const missing = await evaluateChainReadiness({
       registry,
@@ -134,7 +139,7 @@ describe("chain readiness matrix", () => {
     expect(missing).toEqual({ ready: false, reasonCode: "PROVIDER_NOT_READY" });
   });
 
-  it("returns CONFIRMATION_MISMATCH when relayer network and registry differ", async () => {
+  it("returns RELAYER_UNAVAILABLE when relayer network metadata cannot be fetched", async () => {
     const readiness = await evaluateChainReadiness({
       registry: makeRegistry("http://rpc.test"),
       chainId: 1,
@@ -147,14 +152,12 @@ describe("chain readiness matrix", () => {
           network_type: "evm",
           network: "mainnet",
         }),
-        getNetwork: async () => ({
-          id: "evm:mainnet",
-          network_type: "evm",
-          required_confirmations: 2,
-        }),
+        getNetwork: async () => {
+          throw new Error("network metadata unavailable");
+        },
       } as never,
     });
-    expect(readiness).toEqual({ ready: false, reasonCode: "CONFIRMATION_MISMATCH" });
+    expect(readiness).toEqual({ ready: false, reasonCode: "RELAYER_UNAVAILABLE" });
   });
 
   it("returns ready true when relayer and rpc checks pass", async () => {
@@ -186,5 +189,4 @@ describe("chain readiness matrix", () => {
     });
     expect(readiness).toEqual({ ready: true });
   });
-
 });

@@ -36,6 +36,7 @@ export async function buildRelayPayload(overrides?: {
   macroAddress?: `0x${string}`;
   signerAddress?: `0x${string}`;
   value?: string;
+  forceExecuteAfterPreflightRevert?: boolean;
   clientRequestId?: string;
   metadata?: Record<string, string>;
 }) {
@@ -50,6 +51,7 @@ export async function buildRelayPayload(overrides?: {
     payload: overrides?.payload ?? (buildClearMacroParams() as `0x${string}`),
     signature,
     value: overrides?.value,
+    forceExecuteAfterPreflightRevert: overrides?.forceExecuteAfterPreflightRevert,
     clientRequestId: overrides?.clientRequestId,
     metadata: overrides?.metadata,
   };

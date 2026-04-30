@@ -27,6 +27,7 @@ export const clearMacroPayloadAbiParameters = [
 ] as const;
 
 export type DecodedPayload = {
+  domain: string;
   macroContract: string;
   provider: string;
   validAfter: bigint;
@@ -37,6 +38,7 @@ export type DecodedPayload = {
 export function decodeClearMacroPayload(params: string): DecodedPayload {
   const [payload] = decodeAbiParameters(clearMacroPayloadAbiParameters, params as `0x${string}`);
   return {
+    domain: payload.security.domain,
     macroContract: payload.security.macroContract.toLowerCase(),
     provider: payload.security.provider,
     validAfter: payload.security.validAfter,

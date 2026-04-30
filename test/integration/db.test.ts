@@ -11,57 +11,47 @@ function makeDb() {
   return openDatabase(join(dir, "app.sqlite"));
 }
 
+function basePending() {
+  return {
+    clientId: "anonymous",
+    clientRequestId: null,
+    requestBodyHash: "abc",
+    digest: "0x" + "11".repeat(32),
+    domain: "test",
+    kind: "clearMacroV1",
+    chainId: 1,
+    ozRelayerId: "relayer",
+    forwarderAddress: "0x0000000000000000000000000000000000000001",
+    macroAddress: "0x0000000000000000000000000000000000000002",
+    signerAddress: "0x0000000000000000000000000000000000000003",
+    nonce: "1",
+    validAfter: "0",
+    validBefore: "0",
+    value: "0",
+    payload: "0x",
+    signature: "0x",
+    permit2Json: null,
+    metadataJson: "{}",
+    forceAfterPreflightRevert: 0,
+    requiredConfirmations: 1,
+  };
+}
+
 describe("db migrations and repositories", () => {
-  it("applies migrations and enforces idempotency uniqueness", () => {
+  it("applies migrations and enforces digest dedupe uniqueness", () => {
     const db = makeDb();
     runMigrations(db);
     const executions = new RelayExecutionRepository(db);
 
-    executions.createAccepted({
-      clientId: "anonymous",
-      clientRequestId: null,
-      idempotencyKey: "k1",
-      requestBodyHash: "abc",
-      kind: "clearMacroV1",
-      chainId: 1,
-      ozRelayerId: "relayer",
-      forwarderAddress: "0x0000000000000000000000000000000000000001",
-      macroAddress: "0x0000000000000000000000000000000000000002",
-      signerAddress: "0x0000000000000000000000000000000000000003",
-      provider: "macros.superfluid.eth",
-      nonce: "1",
-      validAfter: "0",
-      validBefore: "0",
-      value: "0",
-      payload: "0x",
-      signature: "0x",
-      permit2Json: null,
-      metadataJson: "{}",
-      requiredConfirmations: 1,
+    executions.createPending({
+      ...basePending(),
     });
 
     expect(() =>
-      executions.createAccepted({
-        clientId: "anonymous",
-        clientRequestId: null,
-        idempotencyKey: "k1",
+      executions.createPending({
+        ...basePending(),
         requestBodyHash: "def",
-        kind: "clearMacroV1",
-        chainId: 1,
-        ozRelayerId: "relayer",
-        forwarderAddress: "0x0000000000000000000000000000000000000001",
-        macroAddress: "0x0000000000000000000000000000000000000002",
-        signerAddress: "0x0000000000000000000000000000000000000003",
-        provider: "macros.superfluid.eth",
-        nonce: "2",
-        validAfter: "0",
-        validBefore: "0",
-        value: "0",
-        payload: "0x",
-        signature: "0x",
-        permit2Json: null,
-        metadataJson: "{}",
-        requiredConfirmations: 1,
+        clientRequestId: "other",
       }),
     ).toThrow();
   });
@@ -71,29 +61,11 @@ describe("db migrations and repositories", () => {
     runMigrations(db);
     const executions = new RelayExecutionRepository(db);
     const executionEvents = new RelayExecutionEventRepository(db);
-    const created = executions.createAccepted({
-      clientId: "anonymous",
-      clientRequestId: null,
-      idempotencyKey: null,
-      requestBodyHash: "abc",
-      kind: "clearMacroV1",
-      chainId: 1,
-      ozRelayerId: "relayer",
-      forwarderAddress: "0x0000000000000000000000000000000000000001",
-      macroAddress: "0x0000000000000000000000000000000000000002",
-      signerAddress: "0x0000000000000000000000000000000000000003",
-      provider: "macros.superfluid.eth",
-      nonce: "1",
-      validAfter: "0",
-      validBefore: "0",
-      value: "0",
-      payload: "0x",
-      signature: "0x",
-      permit2Json: null,
-      metadataJson: "{}",
-      requiredConfirmations: 1,
+    const created = executions.createPending({
+      ...basePending(),
+      digest: "0x" + "22".repeat(32),
     });
-    executions.transitionState(created.id, "pending");
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-1" });
     executionEvents.append({
       executionId: created.id,
       type: "state_changed",
@@ -102,8 +74,7 @@ describe("db migrations and repositories", () => {
       detailsJson: "{}",
     });
     const updated = executions.getByIdOrThrow(created.id);
-    expect(updated.state).toBe("pending");
+    expect(updated.state).toBe("submitted");
     expect(executionEvents.listByExecution(created.id)).toHaveLength(1);
   });
 });
-

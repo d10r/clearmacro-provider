@@ -1,9 +1,16 @@
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
-import { registerRoutes } from "./api/routes.js";
+import { registerRoutes, buildBearerResolver, type RegisterRoutesDeps } from "./api/routes.js";
 import type { LoadedRegistry } from "./config/registry.js";
-import type { RelayExecutionRepository, RelayExecutionEventRepository, RelayerTransactionRepository } from "./db/repositories.js";
+import type { AppEnv } from "./config/env.js";
+import {
+  CreateRequestAuditLogRepository,
+  RelayExecutionEventRepository,
+  RelayExecutionRepository,
+  RelayerTransactionRepository,
+} from "./db/repositories.js";
+import type { OzRelayerClient } from "./relayer/client.js";
 import { createMetrics } from "./metrics/metrics.js";
 
 export type AppDeps = {
@@ -11,13 +18,17 @@ export type AppDeps = {
   executions: RelayExecutionRepository;
   executionEvents: RelayExecutionEventRepository;
   relayerTransactions: RelayerTransactionRepository;
-  apiAuthEnabled: boolean;
+  createRequestAudit: CreateRequestAuditLogRepository;
+  providerName: string;
+  relayerClient: OzRelayerClient;
+  env: Pick<AppEnv, "apiAuthEnabled" | "apiClients">;
   requestMaxMetadataKeys: number;
   requestMaxMetadataValueLength: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "CONFIRMATION_MISMATCH" }>;
-  getForwarderDigest: (input: { chainId: number; forwarder: string; macro: string; params: string }) => Promise<string>;
-  validateRelaySignature: (input: { chainId: number; signer: string; digest: string; signature: string }) => Promise<boolean>;
+  getChainReadiness: RegisterRoutesDeps["getChainReadiness"];
+  getForwarderDigest: RegisterRoutesDeps["getForwarderDigest"];
+  validateRelaySignature: RegisterRoutesDeps["validateRelaySignature"];
+  preflightRunMacro?: RegisterRoutesDeps["preflightRunMacro"];
 };
 
 export async function createApp(deps: AppDeps) {
@@ -36,19 +47,25 @@ export async function createApp(deps: AppDeps) {
     return metrics.registry.metrics();
   });
 
+  const bearerResolver = deps.env.apiAuthEnabled ? buildBearerResolver(deps.env.apiClients) : () => null;
+
   await registerRoutes(app, {
     registry: deps.registry,
     executions: deps.executions,
     executionEvents: deps.executionEvents,
     relayerTransactions: deps.relayerTransactions,
-    apiAuthEnabled: deps.apiAuthEnabled,
+    createRequestAudit: deps.createRequestAudit,
+    providerName: deps.providerName,
+    relayerClient: deps.relayerClient,
+    apiAuthEnabled: deps.env.apiAuthEnabled,
+    resolveClientIdFromBearer: bearerResolver,
     requestMaxMetadataKeys: deps.requestMaxMetadataKeys,
     requestMaxMetadataValueLength: deps.requestMaxMetadataValueLength,
     getChainReadiness: deps.getChainReadiness,
     getForwarderDigest: deps.getForwarderDigest,
     validateRelaySignature: deps.validateRelaySignature,
+    ...(deps.preflightRunMacro !== undefined ? { preflightRunMacro: deps.preflightRunMacro } : {}),
   });
 
   return { app, metrics };
 }
-
