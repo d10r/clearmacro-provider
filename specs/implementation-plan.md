@@ -1,5 +1,7 @@
 # ClearMacro Provider Backend: Implementation Plan
 
+> **Status:** Superseded for implementation details by the code + [`simplified-dapp-facing-relay-api.md`](./simplified-dapp-facing-relay-api.md). Kept as historical milestone notes.
+
 ## Goal
 
 Implement the ClearMacro provider backend as a production-ready TypeScript service with a small API, SQLite-backed app state, static registry policy, Prometheus metrics, and OpenZeppelin Relayer as the transaction backend.

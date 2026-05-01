@@ -1,5 +1,7 @@
 # ClearMacro Provider Backend: High-Level Plan
 
+> **Note:** Early planning document. The shipped HTTP API and registry are defined in [`simplified-dapp-facing-relay-api.md`](./simplified-dapp-facing-relay-api.md); this file may describe endpoints and flows that were never implemented or that were superseded.
+
 ## Context
 
 This project implements a production-ready backend provider for dapps using the ClearMacro pattern. In this context, a provider is an authorized offchain relayer/executor, identified by a signed provider string such as `macros.superfluid.eth`, not an RPC provider.

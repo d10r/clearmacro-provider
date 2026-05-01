@@ -1,115 +1,106 @@
 # ClearMacro Provider
 
-ClearMacro Provider is a TypeScript backend service that accepts signed ClearMacro relay executions, validates policy against a static registry, tracks execution lifecycle state in SQLite, and executes transactions through OpenZeppelin Relayer.
+TypeScript service that accepts signed **ClearMacro relay executions**, validates policy against a static **registry**, tracks lifecycle in **SQLite**, and submits transactions via **OpenZeppelin Relayer**. The registry holds chain policy (forwarders, allowed macros, RPCs); relayer IDs are resolved at startup from the relayer API.
 
-## What It Runs
+**Canonical API spec:** [`specs/simplified-dapp-facing-relay-api.md`](specs/simplified-dapp-facing-relay-api.md)  
+**Spec index:** [`specs/README.md`](specs/README.md)
 
-- `app`: Fastify API + relayer worker
-- `oz-relayer`: transaction backend
-- `redis`: OpenZeppelin Relayer persistence
+## What it runs
 
-Main endpoints:
+- **app:** Fastify HTTP API + relayer worker (same process)
+- **oz-relayer:** transaction backend
+- **redis:** OpenZeppelin Relayer repository storage
 
-- `POST /v1/relay-executions`
-- `GET /v1/relay-executions/:id`
-- `GET /v1/capabilities`
-- `GET /healthz`
-- `GET /readyz`
-- `GET /metrics`
+## HTTP API (v1)
 
-Public relay execution states:
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/healthz` | Liveness |
+| `GET` | `/readyz` | Readiness (per-chain: RPC, relayer, signer balance) |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/v1/capabilities` | Global `providerName` + per-chain `forwarderAddress` |
+| `POST` | `/v1/relay-executions` | Create execution (sync validate + preflight; worker submits later) |
+| `GET` | `/v1/relay-executions/:id` | Execution resource; `?include=events` for lifecycle events |
 
-- `accepted`
-- `pending`
-- `submitted`
-- `included`
-- `succeeded`
-- `reverted`
-- `rejected`
-- `failed`
-- `expired`
-- `canceled`
+### Public execution states
 
-Idempotency:
+`pending`, `submitted`, `succeeded`, `reverted`, `rejected`, `failed`, `expired`, `canceled`
 
-- Provide `Idempotency-Key` on `POST /v1/relay-executions` to make create calls retry-safe.
-- Replay with same canonical body returns the same execution resource.
-- Reusing a key with a different canonical body returns `409 IDEMPOTENCY_CONFLICT`.
+New executions start in **`pending`**. After a transaction hash is known, the state is **`submitted`** until a terminal outcome. Full semantics are in the spec linked above.
+
+### Dedup and retries
+
+- The dedupe key is `(chainId, forwarderAddress, signerAddress, digest)` where `digest` is the forwarder’s `getDigest(macro, payload)`. Repeating `POST /v1/relay-executions` with the same intent returns the same execution.
+- Same intent + same authenticated `client_id` → **`200`** with the existing execution.
+- Same intent + different `client_id` (auth on) → **`409 DUPLICATE_EXECUTION`** without leaking the other execution id.
+- With auth off, everyone is `anonymous` → same digest always replays as **`200`**.
+
+### Force after preflight revert
+
+Optional `forceExecuteAfterPreflightRevert: true` creates a **`pending`** execution after a **deterministic** preflight revert (for intentional on-chain attempts). Policy, signature, expiry, readiness, and malformed-payload checks still run as usual; this flag only changes how a deterministic preflight revert is handled.
 
 ## Requirements
 
 - Node.js 24+
 - pnpm 10+
-- Docker + Docker Compose
+- Docker + Docker Compose (for local stack / prod compose)
 
-## Local Development
+## Configuration
 
-Install dependencies:
+### Environment (see `.env.example`)
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `DATABASE_PATH` | yes | SQLite file path |
+| `OZ_RELAYER_URL` | yes | OpenZeppelin Relayer base URL |
+| `OZ_RELAYER_API_KEY` | yes | Relayer API bearer |
+| `REGISTRY_PATH` | no | Default `config/registry.json` |
+| `PROVIDER_NAME` | yes | Must match `payload.security.provider` from dapps (also returned by `GET /v1/capabilities`) |
+| `API_AUTH_ENABLED` | no | Default `false` |
+| `API_CLIENTS_JSON` | if auth on | JSON array `[{ "id", "apiTokenHash" }]` where `apiTokenHash` is SHA-256 hex of the bearer token |
+
+### Registry JSON (`config/registry.json`)
+
+Minimal v1 shape:
+
+- `version`: `1`
+- `chains[]`: `chainId`, `forwarderAddress`, `allowedMacros[]` with `{ domain, address }`, optional `rpcUrls[]` for digest, signature, preflight, and readiness.
+
+Only chains present in `chains[]` are supported; leave chains you do not relay out of the file.
+
+## Local development
 
 ```bash
 pnpm install
-```
-
-Start local relayer stack (Anvil + Redis + OZ Relayer):
-
-```bash
 pnpm run oz:bootstrap:anvil
 pnpm run stack:dev
 ```
 
-Run API locally:
+Run the API (needs `.env` with at least `DATABASE_PATH`, `OZ_*`, `PROVIDER_NAME`, and a valid `config/registry.json`):
 
 ```bash
 pnpm run dev
 ```
 
-Useful checks:
+Checks:
 
 ```bash
 pnpm run typecheck
 pnpm test
+pnpm run test:e2e
+pnpm run test:coverage
 pnpm run build
 ```
 
-## Production Deployment
+## Production deployment
 
-### 1) Prepare environment
+1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, and if using auth, `API_CLIENTS_JSON`.
+2. **`config/registry.json`** — production chains, forwarders, RPC URLs, and allowed `(domain, macroContract)` pairs.
+3. **OpenZeppelin Relayer** — config and keystores under `config/oz-relayer/` (see `config/oz-relayer/README.md`). Signers must be funded on every chain you relay on.
+4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
+5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`
+6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
 
-Create `.env` from `.env.example` and set production values, especially:
+Operational notes: keep Redis persistence for the relayer; back up **both** app SQLite and Redis volumes; run **one** app instance per SQLite file (single worker design).
 
-- `OZ_RELAYER_API_KEY`
-- `OZ_STORAGE_ENCRYPTION_KEY`
-- `OZ_WEBHOOK_SIGNING_KEY`
-- `OZ_KEYSTORE_PASSPHRASE`
-- `DATABASE_PATH` (default is `/data/clearmacro-provider.sqlite` in Compose)
-
-### 2) Provide configuration files
-
-- Create `config/registry.json` (enabled chains, relayer IDs, forwarders, macros, providers).
-- Ensure OpenZeppelin Relayer config is present under `config/oz-relayer/`.
-- Ensure signer keystore files are mounted under `config/oz-relayer/keys/` (do not commit keys).
-
-### 3) Start production stack
-
-```bash
-docker compose -f compose.prod.yaml up -d --build
-```
-
-### 4) Verify health/readiness
-
-- App:
-  - `GET /healthz`
-  - `GET /readyz`
-- Relayer:
-  - `GET /api/v1/health`
-  - `GET /api/v1/ready`
-
-### 5) Operational notes
-
-- Keep `OZ_REPOSITORY_STORAGE_TYPE=redis`.
-- Keep `OZ_RESET_STORAGE_ON_START=false`.
-- Keep `OZ_STORAGE_ENCRYPTION_KEY` stable across restarts.
-- Back up both persistent volumes:
-  - app SQLite data
-  - Redis data used by OpenZeppelin Relayer
-
+Further detail: [`specs/operations.md`](specs/operations.md).

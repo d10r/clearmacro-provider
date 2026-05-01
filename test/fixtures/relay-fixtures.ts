@@ -5,6 +5,7 @@ import { clearMacroPayloadAbiParameters } from "../../src/validation/clearmacro.
 export const TEST_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f094538e7d0f90a33f6f8f6b4a9f4f8f8a8c5d20";
 
 export function buildClearMacroParams(overrides?: {
+  domain?: string;
   provider?: string;
   macroContract?: `0x${string}`;
   validAfter?: bigint;
@@ -16,7 +17,7 @@ export function buildClearMacroParams(overrides?: {
     {
       action: { params: overrides?.actionParams ?? "0x1234" },
       security: {
-        domain: "test",
+        domain: overrides?.domain ?? "test",
         macroContract: overrides?.macroContract ?? "0x0000000000000000000000000000000000000002",
         provider: overrides?.provider ?? "macros.superfluid.eth",
         validAfter: overrides?.validAfter ?? 0n,

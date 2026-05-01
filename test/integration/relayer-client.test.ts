@@ -55,6 +55,48 @@ describe("oz relayer client", () => {
     expect(relayer.address).toBe("0x00000000000000000000000000000000000000aa");
   });
 
+  it("lists relayer ids from a single-page items response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes("/relayers?page=1")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: { items: [{ id: "rel-a" }, { id: "rel-b" }] },
+              error: null,
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ success: false, data: null, error: "unexpected" }), { status: 200 });
+      }),
+    );
+    const client = new OzRelayerClient(baseUrl, "token", 200);
+    const ids = await client.listRelayerIds();
+    expect(ids).toEqual(["rel-a", "rel-b"]);
+  });
+
+  it("lists relayer ids from a top-level array response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: [{ id: "x1" }],
+            error: null,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const client = new OzRelayerClient(baseUrl, "token", 200);
+    const ids = await client.listRelayerIds();
+    expect(ids).toEqual(["x1"]);
+  });
+
   it("returns network details on success envelope", async () => {
     vi.stubGlobal(
       "fetch",

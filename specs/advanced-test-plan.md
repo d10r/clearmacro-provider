@@ -1,5 +1,7 @@
 # ClearMacro Provider Backend: Advanced Test Plan
 
+> **Note:** Stretches goals beyond the current test suite. Baseline coverage lives in `test/unit`, `test/integration`, and `test/e2e`; this document remains aspirational.
+
 ## Goal
 
 Define advanced test suites that harden the ClearMacro Provider beyond the milestone-level coverage in `specs/implementation-plan.md`.

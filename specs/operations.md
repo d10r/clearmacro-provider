@@ -1,93 +1,79 @@
 # ClearMacro Provider Backend: Operations
 
-## Runtime Model
+Canonical product behavior: [`simplified-dapp-facing-relay-api.md`](./simplified-dapp-facing-relay-api.md).
 
-Production runs three local services with Docker Compose from this repository:
+## Runtime model
 
-- `app`: ClearMacro Provider API and relayer worker.
-- `oz-relayer`: OpenZeppelin Relayer transaction backend.
-- `redis`: OpenZeppelin Relayer repository storage.
+Production typically runs three services via Docker Compose from this repository:
 
-The ClearMacro Provider app stores its own state in SQLite on a mounted data volume. OpenZeppelin Relayer stores its transaction backend state in Redis. Prometheus and Grafana are assumed to be external infrastructure and are not bundled.
+- **app:** ClearMacro Provider API + relayer worker.
+- **oz-relayer:** OpenZeppelin Relayer transaction backend.
+- **redis:** OpenZeppelin Relayer repository storage.
 
-## Local Development
+The app stores relay execution state in **SQLite** on a mounted data volume. The relayer stores transaction backend state in **Redis**. Prometheus/Grafana are external.
 
-Start local dependencies:
+## Local development
 
 ```bash
 pnpm run oz:bootstrap:anvil
 pnpm run stack:dev
 ```
 
-Run the app directly on the host for fast reload/debugging:
+Run the app on the host (fast reload):
 
 ```bash
 pnpm run dev
 ```
 
-The app reads `DATABASE_PATH`, `OZ_RELAYER_URL`, `OZ_RELAYER_API_KEY`, and `REGISTRY_PATH` from `.env` or the shell. Use `.env.example` as the template.
+The app reads `.env` (see `.env.example`). Required variables include `DATABASE_PATH`, `OZ_RELAYER_URL`, `OZ_RELAYER_API_KEY`, and **`PROVIDER_NAME`**. If `API_AUTH_ENABLED=true`, set **`API_CLIENTS_JSON`**.
 
-For local end-to-end development, Compose includes Anvil and an OpenZeppelin Relayer config wired to Anvil. `pnpm run oz:bootstrap:anvil` creates the local test keystore expected by `config/oz-relayer/config.json`. Fund the configured local relayer signer before submitting transactions.
+`pnpm run oz:bootstrap:anvil` prepares the local keystore expected by `config/oz-relayer/config.json`. Fund the local relayer signer before submitting.
 
 ## CI
 
-CI should run Node directly and use temporary SQLite files for app integration tests. Unit tests should not require Docker.
-
-Typical flow:
+Typical pipeline:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run typecheck
-pnpm run test
+pnpm test
+pnpm run test:e2e
 pnpm run build
 ```
 
-End-to-end tests that require Anvil + OpenZeppelin Relayer + Redis should run in a separate job or manual workflow because they require Docker and multiple services.
+Unit and integration tests use temporary SQLite databases and mocked relayer/RPC where appropriate. **E2E** tests (`pnpm run test:e2e`) run full HTTP journeys in-process (Fastify `inject`) with the same patterns—no Docker required for CI.
+
+Optional: a separate job with Docker + Anvil + real relayer for contract-backed checks (`RUN_ANVIL_TESTS=1`).
 
 ## Production
 
-Create a production `.env` file from `.env.example`, set real values, provide `config/registry.json`, provide OpenZeppelin Relayer signer config under `config/oz-relayer/`, then run:
+1. Create production `.env` from `.env.example` (`0600`). Set at least:
+   - `OZ_RELAYER_API_KEY`
+   - `PROVIDER_NAME` (must match dapp `payload.security.provider`)
+   - Relayer/redis secrets (`OZ_STORAGE_ENCRYPTION_KEY`, etc.)
+   - `DATABASE_PATH` (default under `/data` in Compose)
+   - If auth: `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`
+2. Provide **`config/registry.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, `allowedMacros[]` (`domain` + `address`), optional `rpcUrls`.
+3. Provide OpenZeppelin Relayer config and keystores under **`config/oz-relayer/`** (keys not in git).
+4. Ensure **exactly one** active relayer per configured chain is discoverable via the relayer API at app startup.
+5. `docker compose -f compose.prod.yaml up -d --build`
+6. Verify **`GET /readyz`**, relayer **`GET /api/v1/ready`**, then smoke **`GET /v1/capabilities`** and a controlled **`POST /v1/relay-executions`**.
 
-```bash
-docker compose -f compose.prod.yaml up -d --build
-```
+Self-contained stack: app + relayer + Redis. Do not horizontally scale multiple app workers against the same SQLite file.
 
-Production requirements:
+## Data and backups
 
-- Set a strong `OZ_RELAYER_API_KEY`.
-- Set a stable high-entropy `OZ_STORAGE_ENCRYPTION_KEY`; do not rotate it casually because OpenZeppelin Relayer uses it for stored repository data.
-- Set `OZ_RESET_STORAGE_ON_START=false`.
-- Keep `OZ_REPOSITORY_STORAGE_TYPE=redis`.
-- Keep OpenZeppelin Relayer signer keys out of git.
-- Ensure the relayer signer has native gas token on every enabled chain.
-- Provide `config/registry.json`; the example file is intentionally disabled.
-- Back up the app SQLite volume and Redis volume.
-- Configure external Prometheus to scrape the app `/metrics` endpoint and the OpenZeppelin Relayer metrics endpoint.
-- Monitor app readiness via `/readyz` and liveness via `/healthz`.
-- Monitor OpenZeppelin Relayer readiness via `/api/v1/ready` and liveness via `/api/v1/health`.
+- **app-data:** SQLite (`relay_executions`, audit log, events, internal relayer snapshots).
+- **oz-redis-data:** Relayer repository state.
 
-The production Compose stack is intentionally self-contained for this service: app, OpenZeppelin Relayer, and Redis. Do not expect an external database service.
+Back up **both**. Loss of Redis loses relayer-side transaction metadata; loss of SQLite loses app-side execution history.
 
-Run exactly one `app` container in v1. SQLite is the app state store and the relayer worker is designed for one active app process. Do not horizontally scale the app or run multiple worker processes against the same SQLite database until an explicit distributed claiming mechanism is added.
+## Deployment checklist
 
-## Data And Backups
-
-Persistent volumes:
-
-- `app-data`: SQLite database and related app files.
-- `oz-redis-data`: Redis append-only persistence for OpenZeppelin Relayer repository state.
-
-Backup both volumes. SQLite contains client-facing request/audit state; Redis contains OpenZeppelin Relayer transaction backend state.
-
-## Deployment Checklist
-
-- Confirm AGPL-3.0 licensing for OpenZeppelin Relayer is acceptable for the deployment.
-- Create a dedicated Linux user for the service with Docker access.
-- Place production `.env` with mode `0600`.
-- Place `config/registry.json` with enabled chains and relayer IDs.
-- Place OpenZeppelin Relayer config and signer keystore under `config/oz-relayer/`.
-- Start Compose.
-- Verify `app` `/readyz` is healthy.
-- Verify OpenZeppelin Relayer `/api/v1/ready` is healthy.
-- Verify Prometheus can scrape both metrics endpoints.
-- Submit a small smoke-test transaction on an explicitly selected chain only after confirming signer funding.
+- AGPL-3.0 acceptable for OpenZeppelin Relayer in your environment.
+- Dedicated service user with Docker access where applicable.
+- Production `.env` and `config/registry.json` permissions locked down.
+- `PROVIDER_NAME` aligned with dapps and `GET /v1/capabilities`.
+- Relayer signer funded on every chain in `registry.json`.
+- External Prometheus scraping **`/metrics`** (and relayer metrics if used).
+- Liveness **`/healthz`**, readiness **`/readyz`** wired into orchestration.

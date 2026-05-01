@@ -1,5 +1,7 @@
 # ClearMacro Provider Backend: Relayer Policy
 
+> **Note:** Policy and lifecycle notes from an earlier iteration. For the current public relay execution model and worker rules, see [`simplified-dapp-facing-relay-api.md`](./simplified-dapp-facing-relay-api.md).
+
 ## Goal
 
 Define how the ClearMacro Provider app uses OpenZeppelin Relayer for transaction execution and how relayer status is projected into ClearMacro request lifecycle state.

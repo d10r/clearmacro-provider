@@ -1,5 +1,7 @@
 # Dapp-Facing Relay API Update Spec
 
+> **Status:** Superseded for the shipped public API and registry by [`simplified-dapp-facing-relay-api.md`](./simplified-dapp-facing-relay-api.md). This file is kept for historical design discussion (e.g. earlier idempotency-key model and `accepted` / `included` states).
+
 ## Goal
 
 Update `clearmacro-provider` so a dapp can migrate from connected-wallet transaction broadcasting to ClearMacro relaying with minimal transaction-state complexity.
@@ -115,6 +117,7 @@ Request body:
 type CreateRelayExecutionRequest = {
   kind: "clearMacroV1";
   chainId: number;
+  forwarderAddress: `0x${string}`;
   macroAddress: `0x${string}`;
   signerAddress: `0x${string}`;
   payload: `0x${string}`;
@@ -131,7 +134,7 @@ Field naming changes from current API:
 | Current                    | New                | Reason                                                             |
 | -------------------------- | ------------------ | ------------------------------------------------------------------ |
 | `macro`                    | `macroAddress`     | Address fields should be explicit.                                 |
-| `forwarder`                | resolved by provider | Forwarder is registry-owned for `(chainId, kind)` and not client-provided. |
+| `forwarder`                | `forwarderAddress` | Address fields should be explicit.                                 |
 | `signer`                   | `signerAddress`    | Address fields should be explicit.                                 |
 | `params`                   | `payload`          | The dapp constructs a ClearMacro payload; `params` is too generic. |
 | `msgValue`                 | `value`            | Matches transaction API vocabulary.                                |
@@ -835,3 +838,4 @@ Dashboard adapter tests, if/when implemented:
 - Keep `clientRequestId` non-unique. Use `Idempotency-Key` for exactly-once semantics.
 - Do not implement the wait endpoint in the first API update. Build a dapp/client helper first; add server-side wait only if real integration shows it reduces complexity.
 - Remove old endpoint aliases instead of keeping compatibility shims.
+
