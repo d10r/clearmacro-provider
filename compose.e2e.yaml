@@ -15,6 +15,10 @@ services:
       - "31337"
       - --block-time
       - "1"
+      - --code-size-limit
+      - "100000"
+      - --gas-limit
+      - "120000000"
     ports:
       - "${E2E_ANVIL_PORT:?E2E_ANVIL_PORT required}:8545"
 
@@ -66,7 +70,7 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: "3000"
-      DATABASE_PATH: /data/clearmacro-e2e.sqlite
+      DATABASE_PATH: /stack-data/clearmacro-e2e.sqlite
       REGISTRY_PATH: /stack/registry.json
       OZ_RELAYER_URL: http://oz-relayer:8080
       OZ_RELAYER_API_KEY: ${E2E_OZ_RELAYER_API_KEY:?E2E_OZ_RELAYER_API_KEY required}
@@ -81,8 +85,7 @@ services:
       - "${E2E_APP_PORT:?E2E_APP_PORT required}:3000"
     volumes:
       - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/stack:ro
-      - e2e-app-data:/data
+      - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}/data:/stack-data
 
 volumes:
   e2e-oz-redis:
-  e2e-app-data:

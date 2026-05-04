@@ -164,6 +164,297 @@ export function ensureFixtureArtifact(repoRoot: string): { abi: unknown; bytecod
   return JSON.parse(readFileSync(artifactPath, "utf8")) as { abi: unknown; bytecode: { object: string } };
 }
 
+export interface FullStackDeployOutput {
+  chainId: number;
+  providerName: string;
+  host: Address;
+  simpleACL: Address;
+  forwarderAddress: Address;
+  macroAddress: Address;
+  relayerSigner: Address;
+}
+
+const fullStackE2EDeployerAbi = [
+  {
+    type: "function",
+    name: "deployFullStack",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "relayerSigner", type: "address" }],
+    outputs: [
+      {
+        name: "deployment",
+        type: "tuple",
+        components: [
+          { name: "chainId", type: "uint256" },
+          { name: "providerName", type: "string" },
+          { name: "host", type: "address" },
+          { name: "simpleACL", type: "address" },
+          { name: "forwarderAddress", type: "address" },
+          { name: "macroAddress", type: "address" },
+          { name: "relayerSigner", type: "address" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "getDeployment",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "deployment",
+        type: "tuple",
+        components: [
+          { name: "chainId", type: "uint256" },
+          { name: "providerName", type: "string" },
+          { name: "host", type: "address" },
+          { name: "simpleACL", type: "address" },
+          { name: "forwarderAddress", type: "address" },
+          { name: "macroAddress", type: "address" },
+          { name: "relayerSigner", type: "address" },
+        ],
+      },
+    ],
+  },
+] as const;
+
+function normalizeFullStackDeployment(value: {
+  chainId: bigint;
+  providerName: string;
+  host: Address;
+  simpleACL: Address;
+  forwarderAddress: Address;
+  macroAddress: Address;
+  relayerSigner: Address;
+}): FullStackDeployOutput {
+  return {
+    chainId: Number(value.chainId),
+    providerName: value.providerName,
+    host: value.host,
+    simpleACL: value.simpleACL,
+    forwarderAddress: value.forwarderAddress,
+    macroAddress: value.macroAddress,
+    relayerSigner: value.relayerSigner,
+  };
+}
+
+type FoundryArtifact = {
+  abi: unknown;
+  bytecode: {
+    object: Hex;
+    linkReferences?: Record<string, Record<string, Array<{ start: number; length: number }>>>;
+  };
+};
+
+function linkArtifactBytecode(artifact: FoundryArtifact, libraries: Record<string, Address>): Hex {
+  let bytecode = artifact.bytecode.object;
+  for (const contracts of Object.values(artifact.bytecode.linkReferences ?? {})) {
+    for (const [libraryName, refs] of Object.entries(contracts)) {
+      const address = libraries[libraryName];
+      if (!address) {
+        throw new Error(`Missing deployed library address for ${libraryName}`);
+      }
+      const replacement = address.slice(2).toLowerCase();
+      for (const ref of refs) {
+        const start = 2 + ref.start * 2;
+        const length = ref.length * 2;
+        bytecode = `${bytecode.slice(0, start)}${replacement}${bytecode.slice(start + length)}` as Hex;
+      }
+    }
+  }
+  if (bytecode.includes("__")) {
+    throw new Error("Linked bytecode still contains unresolved library placeholders");
+  }
+  return bytecode;
+}
+
+function readFoundryArtifact(forgeDir: string, artifactPath: string): FoundryArtifact {
+  return JSON.parse(readFileSync(join(forgeDir, "out", artifactPath), "utf8")) as FoundryArtifact;
+}
+
+export async function setERC1820RegistryCode(input: { repoRoot: string; rpcUrl: string }): Promise<void> {
+  const sourcePath = join(
+    input.repoRoot,
+    "node_modules",
+    "@superfluid-finance",
+    "ethereum-contracts",
+    "contracts",
+    "libs",
+    "ERC1820RegistryCompiled.sol",
+  );
+  const source = readFileSync(sourcePath, "utf8");
+  const match = source.match(/bytes internal constant bin = bytes\(hex"([0-9a-fA-F]+)"\)/);
+  if (!match?.[1]) {
+    throw new Error(`Could not extract ERC1820 bytecode from ${sourcePath}`);
+  }
+  const res = await fetch(input.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "anvil_setCode",
+      params: ["0x1820a4B7618BdE71Dce8cdc73aAB6C95905faD24", `0x${match[1]}`],
+    }),
+  });
+  const json = (await res.json()) as { error?: { message?: string } };
+  if (json.error) {
+    throw new Error(`anvil_setCode ERC1820 failed: ${json.error.message ?? JSON.stringify(json.error)}`);
+  }
+}
+
+function assertAddress(value: unknown, field: string): Address {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    throw new Error(`Invalid deploy output ${field}: ${String(value)}`);
+  }
+  return value as Address;
+}
+
+export function parseFullStackDeployOutput(raw: string): FullStackDeployOutput {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  if (parsed.chainId !== 31337) {
+    throw new Error(`Invalid deploy output chainId: ${String(parsed.chainId)}`);
+  }
+  if (parsed.providerName !== "macros.superfluid.eth") {
+    throw new Error(`Invalid deploy output providerName: ${String(parsed.providerName)}`);
+  }
+  return {
+    chainId: parsed.chainId,
+    providerName: parsed.providerName,
+    host: assertAddress(parsed.host, "host"),
+    simpleACL: assertAddress(parsed.simpleACL, "simpleACL"),
+    forwarderAddress: assertAddress(parsed.forwarderAddress, "forwarderAddress"),
+    macroAddress: assertAddress(parsed.macroAddress, "macroAddress"),
+    relayerSigner: assertAddress(parsed.relayerSigner, "relayerSigner"),
+  };
+}
+
+export function forgeBuildFullStackFixtures(repoRoot: string): void {
+  const r = spawnSync("forge", ["build", "--root", join(repoRoot, "test", "fixtures", "contracts")], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+  });
+  if (r.error) {
+    throw r.error;
+  }
+  if (r.status !== 0) {
+    throw new Error(`forge build failed for full stack fixtures (exit ${r.status}):\n${r.stderr || r.stdout}`);
+  }
+}
+
+export function deployFullStackE2EContracts(input: {
+  repoRoot: string;
+  rpcUrl?: string;
+  outputPath: string;
+  relayerSigner?: Address;
+  broadcast?: boolean;
+}): FullStackDeployOutput {
+  const forgeDir = join(input.repoRoot, "test", "fixtures", "contracts");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    E2E_DEPLOY_OUTPUT: input.outputPath,
+  };
+  if (input.relayerSigner) {
+    env.E2E_RELAYER_SIGNER = input.relayerSigner;
+  }
+  const args = ["script", "script/DeployFullStackE2E.s.sol:DeployFullStackE2E", "--non-interactive", "--disable-code-size-limit"];
+  if (input.broadcast === true) {
+    if (!input.rpcUrl) {
+      throw new Error("rpcUrl is required when broadcasting full stack E2E deploy");
+    }
+    args.push("--rpc-url", input.rpcUrl, "--broadcast", "--private-key", ANVIL_DEFAULT_DEPLOYER_PK, "--slow");
+  }
+  const r = spawnSync("forge", args, { cwd: forgeDir, env, encoding: "utf-8", timeout: 120_000 });
+  if (r.error) {
+    throw r.error;
+  }
+  if (r.status !== 0) {
+    throw new Error(`full stack deploy script failed (exit ${r.status}):\n${r.stderr || r.stdout}`);
+  }
+  if (!existsSync(input.outputPath)) {
+    throw new Error(`Full stack deploy output missing: ${input.outputPath}`);
+  }
+  return parseFullStackDeployOutput(readFileSync(input.outputPath, "utf8"));
+}
+
+export async function deployFullStackE2EContractsOnAnvil(input: {
+  repoRoot: string;
+  rpcUrl: string;
+  relayerSigner: Address;
+}): Promise<FullStackDeployOutput> {
+  const forgeDir = join(input.repoRoot, "test", "fixtures", "contracts");
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const deployer = privateKeyToAccount(ANVIL_DEFAULT_DEPLOYER_PK);
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  const walletClient = createWalletClient({ chain, transport: http(input.rpcUrl), account: deployer });
+
+  async function deployArtifact(artifactPath: string, libraries: Record<string, Address>): Promise<Address> {
+    const artifact = readFoundryArtifact(forgeDir, artifactPath);
+    const hash = await walletClient.deployContract({
+      abi: artifact.abi as never,
+      bytecode: linkArtifactBytecode(artifact, libraries),
+      gas: 40_000_000n,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    if (receipt.status !== "success" || !receipt.contractAddress) {
+      throw new Error(`Deployment failed for ${artifactPath}: ${hash}`);
+    }
+    return receipt.contractAddress;
+  }
+
+  const libraries: Record<string, Address> = {};
+  for (const libraryName of ["SlotsBitmapLibrary", "SuperfluidPoolDeployerLibrary"]) {
+    libraries[libraryName] = await deployArtifact(`${libraryName}.sol/${libraryName}.json`, libraries);
+  }
+  for (const libraryName of [
+    "CFAv1ForwarderDeployerLibrary",
+    "GDAv1ForwarderDeployerLibrary",
+    "ProxyDeployerLibrary",
+    "SuperTokenDeployerLibrary",
+    "SuperTokenFactoryDeployerLibrary",
+    "SuperfluidCFAv1DeployerLibrary",
+    "SuperfluidGDAv1DeployerLibrary",
+    "SuperfluidGovDeployerLibrary",
+    "SuperfluidHostDeployerLibrary",
+    "SuperfluidIDAv1DeployerLibrary",
+    "SuperfluidPeripheryDeployerLibrary",
+    "SuperfluidPoolLogicDeployerLibrary",
+    "SuperfluidPoolNFTLogicDeployerLibrary",
+    "TokenDeployerLibrary",
+  ]) {
+    libraries[libraryName] = await deployArtifact(
+      `SuperfluidFrameworkDeploymentSteps.t.sol/${libraryName}.json`,
+      libraries,
+    );
+  }
+  const contractAddress = await deployArtifact("FullStackE2EDeployer.sol/FullStackE2EDeployer.json", libraries);
+
+  const runHash = await walletClient.writeContract({
+    address: contractAddress,
+    abi: fullStackE2EDeployerAbi,
+    functionName: "deployFullStack",
+    args: [input.relayerSigner],
+    gas: 100_000_000n,
+  });
+  const runReceipt = await publicClient.waitForTransactionReceipt({ hash: runHash, timeout: 180_000 });
+  if (runReceipt.status !== "success") {
+    throw new Error(`Full stack deployment transaction failed: ${runHash}`);
+  }
+
+  const deployment = await publicClient.readContract({
+    address: contractAddress,
+    abi: fullStackE2EDeployerAbi,
+    functionName: "getDeployment",
+  });
+  return normalizeFullStackDeployment(deployment);
+}
+
 /** Same default private key as scripts/bootstrap-oz-anvil-keystore.ts */
 export const RELAYER_SIGNER_PRIVATE_KEY =
   (process.env.RELAYER_SIGNER_PRIVATE_KEY as Hex | undefined) ??
@@ -246,8 +537,8 @@ export function writeOzRelayerConfig(stackDir: string): void {
   chmodSync(evmPath, 0o644);
 }
 
-export function writeProviderRegistry(stackDir: string, forwarderAddress: string): void {
-  const macro = "0x00000000000000000000000000000000000000aa";
+export function writeProviderRegistry(stackDir: string, forwarderAddress: string, macroAddress?: string): void {
+  const macro = macroAddress ?? "0x00000000000000000000000000000000000000aa";
   const registry = {
     version: 1,
     chains: [
@@ -337,5 +628,7 @@ export function digestForRelayerLikeFixture(macro: Address, payload: Hex): Hex {
 export function makeStackWorkDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "cm-stack-e2e-"));
   chmodSync(dir, 0o755);
+  mkdirSync(join(dir, "data"), { recursive: true });
+  chmodSync(join(dir, "data"), 0o755);
   return dir;
 }

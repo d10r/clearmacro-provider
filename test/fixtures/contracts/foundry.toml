@@ -1,5 +1,21 @@
 [profile.default]
 src = "src"
+script = "script"
 out = "out"
-libs = []
-solc = "0.8.24"
+libs = ["lib"]
+allow_paths = [
+  "../../../node_modules",
+  "/home/didi/src/sf/protocol-monorepo/packages/ethereum-contracts",
+  "/home/didi/src/sf/protocol-monorepo/packages/solidity-semantic-money"
+]
+solc = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+fs_permissions = [{ access = "read-write", path = "/tmp" }]
+
+remappings = [
+  "@superfluid-finance/ethereum-contracts/=/home/didi/src/sf/protocol-monorepo/packages/ethereum-contracts/",
+  "@superfluid-finance/solidity-semantic-money/=/home/didi/src/sf/protocol-monorepo/packages/solidity-semantic-money/",
+  "@openzeppelin-v5/=/home/didi/src/sf/clearmacro-provider/node_modules/@openzeppelin/"
+]

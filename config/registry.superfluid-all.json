@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "chains": [
+    {
+      "chainId": 1,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://cloudflare-eth.com",
+        "https://eth-rpc.gateway.pokt.network"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 10,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://mainnet.optimism.io",
+        "https://rpc.ankr.com/optimism"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 56,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://bscrpc.com",
+        "https://bsc-dataseed.binance.org"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 100,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://rpc.gnosischain.com",
+        "https://gnosischain-rpc.gateway.pokt.network"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 137,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://polygon-rpc.com",
+        "https://poly-rpc.gateway.pokt.network"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 8453,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://developer-access-mainnet.base.org"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 42161,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum.blockpi.network/v1/rpc/public"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 42220,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://forno.celo.org",
+        "https://rpc.ankr.com/celo"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 43113,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://api.avax-test.network/ext/bc/C/rpc",
+        "https://avalanche-fuji-c-chain.publicnode.com"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 43114,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://api.avax.network/ext/bc/C/rpc",
+        "https://rpc.ankr.com/avalanche"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 84532,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://sepolia.base.org"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 534351,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://sepolia-rpc.scroll.io"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 534352,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://rpc.scroll.io"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 11155111,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://rpc.sepolia.org",
+        "https://ethereum-sepolia.blockpi.network/v1/rpc/public"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 11155420,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://sepolia.optimism.io"
+      ],
+      "allowedMacros": []
+    },
+    {
+      "chainId": 666666666,
+      "forwarderAddress": "0xFD0268E33111565dE546af2675351A4b1587F89F",
+      "rpcUrls": [
+        "https://rpc.degen.tips"
+      ],
+      "allowedMacros": []
+    }
+  ]
+}
