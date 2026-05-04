@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -275,10 +275,7 @@ function readFoundryArtifact(forgeDir: string, artifactPath: string): FoundryArt
 
 export async function setERC1820RegistryCode(input: { repoRoot: string; rpcUrl: string }): Promise<void> {
   const sourcePath = join(
-    input.repoRoot,
-    "node_modules",
-    "@superfluid-finance",
-    "ethereum-contracts",
+    process.env.SUPERFLUID_ETHEREUM_CONTRACTS_DIR ?? join(input.repoRoot, "..", "protocol-monorepo", "packages", "ethereum-contracts"),
     "contracts",
     "libs",
     "ERC1820RegistryCompiled.sol",
@@ -304,32 +301,6 @@ export async function setERC1820RegistryCode(input: { repoRoot: string; rpcUrl: 
   }
 }
 
-function assertAddress(value: unknown, field: string): Address {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
-    throw new Error(`Invalid deploy output ${field}: ${String(value)}`);
-  }
-  return value as Address;
-}
-
-export function parseFullStackDeployOutput(raw: string): FullStackDeployOutput {
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
-  if (parsed.chainId !== 31337) {
-    throw new Error(`Invalid deploy output chainId: ${String(parsed.chainId)}`);
-  }
-  if (parsed.providerName !== "macros.superfluid.eth") {
-    throw new Error(`Invalid deploy output providerName: ${String(parsed.providerName)}`);
-  }
-  return {
-    chainId: parsed.chainId,
-    providerName: parsed.providerName,
-    host: assertAddress(parsed.host, "host"),
-    simpleACL: assertAddress(parsed.simpleACL, "simpleACL"),
-    forwarderAddress: assertAddress(parsed.forwarderAddress, "forwarderAddress"),
-    macroAddress: assertAddress(parsed.macroAddress, "macroAddress"),
-    relayerSigner: assertAddress(parsed.relayerSigner, "relayerSigner"),
-  };
-}
-
 export function forgeBuildFullStackFixtures(repoRoot: string): void {
   const r = spawnSync("forge", ["build", "--root", join(repoRoot, "test", "fixtures", "contracts")], {
     cwd: repoRoot,
@@ -341,41 +312,6 @@ export function forgeBuildFullStackFixtures(repoRoot: string): void {
   if (r.status !== 0) {
     throw new Error(`forge build failed for full stack fixtures (exit ${r.status}):\n${r.stderr || r.stdout}`);
   }
-}
-
-export function deployFullStackE2EContracts(input: {
-  repoRoot: string;
-  rpcUrl?: string;
-  outputPath: string;
-  relayerSigner?: Address;
-  broadcast?: boolean;
-}): FullStackDeployOutput {
-  const forgeDir = join(input.repoRoot, "test", "fixtures", "contracts");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    E2E_DEPLOY_OUTPUT: input.outputPath,
-  };
-  if (input.relayerSigner) {
-    env.E2E_RELAYER_SIGNER = input.relayerSigner;
-  }
-  const args = ["script", "script/DeployFullStackE2E.s.sol:DeployFullStackE2E", "--non-interactive", "--disable-code-size-limit"];
-  if (input.broadcast === true) {
-    if (!input.rpcUrl) {
-      throw new Error("rpcUrl is required when broadcasting full stack E2E deploy");
-    }
-    args.push("--rpc-url", input.rpcUrl, "--broadcast", "--private-key", ANVIL_DEFAULT_DEPLOYER_PK, "--slow");
-  }
-  const r = spawnSync("forge", args, { cwd: forgeDir, env, encoding: "utf-8", timeout: 120_000 });
-  if (r.error) {
-    throw r.error;
-  }
-  if (r.status !== 0) {
-    throw new Error(`full stack deploy script failed (exit ${r.status}):\n${r.stderr || r.stdout}`);
-  }
-  if (!existsSync(input.outputPath)) {
-    throw new Error(`Full stack deploy output missing: ${input.outputPath}`);
-  }
-  return parseFullStackDeployOutput(readFileSync(input.outputPath, "utf8"));
 }
 
 export async function deployFullStackE2EContractsOnAnvil(input: {
@@ -631,4 +567,20 @@ export function makeStackWorkDir(): string {
   mkdirSync(join(dir, "data"), { recursive: true });
   chmodSync(join(dir, "data"), 0o755);
   return dir;
+}
+
+/** OZ relayer mounts `stackDir` read-only; ensure non-root in the container can read files. */
+export function chmodStackTree(stackDir: string): void {
+  const walk = (dir: string): void => {
+    chmodSync(dir, 0o755);
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) {
+        walk(p);
+      } else {
+        chmodSync(p, 0o644);
+      }
+    }
+  };
+  walk(stackDir);
 }

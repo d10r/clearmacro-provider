@@ -128,7 +128,7 @@ export async function evaluateChainReadiness(input: {
   if (!relayerId) {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
-  let relayerReady = false;
+  let relayerReady: boolean;
   try {
     relayerReady = await input.relayerClient.ready();
   } catch {
@@ -187,7 +187,9 @@ export async function validateRelaySignature(input: {
   try {
     code = await withRpcFallback(chain, async (client) => client.getBytecode({ address: input.signer as `0x${string}` }));
   } catch (error) {
-    throw new Error(`RPC unavailable during signature validation: ${error instanceof Error ? error.message : "unknown"}`);
+    throw new Error(`RPC unavailable during signature validation: ${error instanceof Error ? error.message : "unknown"}`, {
+      cause: error,
+    });
   }
   if (!code || code === "0x") {
     return false;
@@ -204,7 +206,9 @@ export async function validateRelaySignature(input: {
     return value.toLowerCase().startsWith(ERC1271_MAGIC_VALUE);
   } catch (error) {
     if (isRpcUnavailableError(error)) {
-      throw new Error(`RPC unavailable during ERC-1271 validation: ${error instanceof Error ? error.message : "unknown"}`);
+      throw new Error(`RPC unavailable during ERC-1271 validation: ${error instanceof Error ? error.message : "unknown"}`, {
+        cause: error,
+      });
     }
     return false;
   }

@@ -51,7 +51,7 @@ async function main() {
     }
   }
 
-  let final: Record<string, unknown> = {};
+  let final: Record<string, unknown>;
   try {
     final = await pollUntilTerminal(submittedIds, { timeoutMs: 180_000, pollMs: 1_000 });
   } catch (error) {

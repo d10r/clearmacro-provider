@@ -54,12 +54,6 @@ importers:
       '@openzeppelin/contracts':
         specifier: ^5.6.1
         version: 5.6.1
-      '@superfluid-finance/ethereum-contracts':
-        specifier: link:/home/didi/src/sf/protocol-monorepo/packages/ethereum-contracts
-        version: link:../protocol-monorepo/packages/ethereum-contracts
-      '@superfluid-finance/solidity-semantic-money':
-        specifier: link:/home/didi/src/sf/protocol-monorepo/packages/solidity-semantic-money
-        version: link:../protocol-monorepo/packages/solidity-semantic-money
       '@types/node':
         specifier: ^24.12.2
         version: 24.12.2

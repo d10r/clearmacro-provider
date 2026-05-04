@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:e2e": "vitest run test/e2e",
     "test:e2e:stack": "RUN_STACK_E2E=1 vitest run test/e2e/relay-stack.e2e.test.ts",
+    "stack:e2e": "bash scripts/run-stack-e2e.sh",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:watch": "vitest",
@@ -50,8 +51,6 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@openzeppelin/contracts": "^5.6.1",
-    "@superfluid-finance/ethereum-contracts": "link:/home/didi/src/sf/protocol-monorepo/packages/ethereum-contracts",
-    "@superfluid-finance/solidity-semantic-money": "link:/home/didi/src/sf/protocol-monorepo/packages/solidity-semantic-money",
     "@types/node": "^24.12.2",
     "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.2.1",

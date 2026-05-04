@@ -3,6 +3,7 @@ pragma solidity ^0.8.23;
 
 import { IAccessControl } from "@openzeppelin-v5/contracts/access/IAccessControl.sol";
 import { ISuperfluid } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
+import { ISETH } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/tokens/ISETH.sol";
 import { ISuperfluidToken } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluidToken.sol";
 import { ClearMacroForwarderV1 } from "@superfluid-finance/ethereum-contracts/contracts/utils/ClearMacroForwarderV1.sol";
 import { SuperfluidFrameworkDeployer } from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.t.sol";
@@ -42,8 +43,9 @@ contract FullStackE2EDeployer is SuperfluidFrameworkDeployer {
         }
 
         SuperfluidFrameworkDeployer.Framework memory sf = this.getFramework();
+        ISETH nativeSuperToken = this.deployNativeAssetSuperToken("Ether", "ETHx");
         ClearMacroForwarderV1 forwarder = new ClearMacroForwarderV1(ISuperfluid(address(sf.host)));
-        StackE2EClearMacro clearMacro = new StackE2EClearMacro();
+        StackE2EClearMacro clearMacro = new StackE2EClearMacro(address(nativeSuperToken));
 
         sf.governance.enableTrustedForwarder(sf.host, ISuperfluidToken(address(0)), address(forwarder));
         IAccessControl(sf.host.getSimpleACL()).grantRole(keccak256(bytes(PROVIDER_NAME)), relayerSigner);

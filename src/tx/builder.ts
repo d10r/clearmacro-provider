@@ -23,6 +23,16 @@ export const clearMacroForwarderV1Abi = [
     ],
     outputs: [{ name: "digest", type: "bytes32" }],
   },
+  {
+    type: "function",
+    name: "getNonce",
+    stateMutability: "view",
+    inputs: [
+      { name: "sender", type: "address" },
+      { name: "key", type: "uint192" },
+    ],
+    outputs: [{ name: "nonce", type: "uint256" }],
+  },
 ] as const;
 
 export function buildRunMacroCalldata(input: {
