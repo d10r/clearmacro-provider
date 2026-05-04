@@ -46,8 +46,10 @@ Spec: discover OZ relayer per registry `chainId` by querying the relayer API and
 
 ## Test / coverage status (v8)
 
-- **`pnpm test`** — unit, integration, and **`test/e2e`** relay journeys (HTTP + one full worker path to `succeeded`).
-- **`pnpm test:coverage`** — typically **~84%** statements across `src/`; largest remaining gaps are **`readiness.ts`** (real RPC fallbacks) and some **`routes.ts`** branches (e.g. rare error paths). Full RPC + live relayer matrix belongs in staging / `RUN_ANVIL_TESTS=1`, not required for CI gate.
+- **`pnpm test`** — unit, integration, **`test/e2e`**, and **Anvil preflight** (`test/integration/preflight-anvil.test.ts`; requires `anvil` on `PATH`).
+- **`pnpm test:coverage`** — typically **~84%** statements across `src/`; largest remaining gaps are **`readiness.ts`** (real RPC fallbacks) and some **`routes.ts`** branches (e.g. rare error paths). Full RPC + live relayer matrix belongs in staging.
+- **Registry `rpcUrls`:** required non-empty per chain (Strategy A); load fails otherwise.
+- **`required_confirmations`:** bound at startup in `bindRelayersToRegistry` (`requiredConfirmationsByChainId`); `POST` does not re-query OZ for finality policy.
 
 ## Changelog
 

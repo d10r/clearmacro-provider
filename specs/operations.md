@@ -43,7 +43,9 @@ pnpm run build
 
 Unit and integration tests use temporary SQLite databases and mocked relayer/RPC where appropriate. **E2E** tests (`pnpm run test:e2e`) run full HTTP journeys in-process (Fastify `inject`) with the same patterns—no Docker required for CI.
 
-Optional: a separate job with Docker + Anvil + real relayer for contract-backed checks (`RUN_ANVIL_TESTS=1`).
+Contract-backed **preflight** integration tests (`test/integration/preflight-anvil.test.ts`) spawn **Anvil** and require the `anvil` binary on `PATH` (e.g. [Foundry](https://book.getfoundry.sh/getting-started/installation)).
+
+**Docker stack E2E** (`pnpm run test:e2e:stack`) brings up **Redis, Anvil, OpenZeppelin Relayer, and the provider app** via [compose.e2e.yaml](compose.e2e.yaml), deploys the `RelayerLikePreflightForwarder` fixture on Anvil (not production ClearMacro), and asserts HTTP smoke through to `succeeded`. Requires **Docker**, **Docker Compose v2**, **pnpm**, **Foundry** (`forge` for the fixture artifact, `cast` optional for keystore bootstrap), and a one-time **`pnpm run oz:bootstrap:anvil`** if `config/oz-relayer/keys/anvil-relayer.json` is missing. The script sets `RUN_STACK_E2E=1` automatically.
 
 ## Production
 
@@ -53,7 +55,7 @@ Optional: a separate job with Docker + Anvil + real relayer for contract-backed 
    - Relayer/redis secrets (`OZ_STORAGE_ENCRYPTION_KEY`, etc.)
    - `DATABASE_PATH` (default under `/data` in Compose)
    - If auth: `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`
-2. Provide **`config/registry.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, `allowedMacros[]` (`domain` + `address`), optional `rpcUrls`.
+2. Provide **`config/registry.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`).
 3. Provide OpenZeppelin Relayer config and keystores under **`config/oz-relayer/`** (keys not in git).
 4. Ensure **exactly one** active relayer per configured chain is discoverable via the relayer API at app startup.
 5. `docker compose -f compose.prod.yaml up -d --build`

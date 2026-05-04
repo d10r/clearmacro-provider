@@ -11,7 +11,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import { preflightRunMacro } from "../../src/chain/readiness.js";
 import fixtureArtifact from "../../out/RelayerLikePreflightForwarder.sol/RelayerLikePreflightForwarder.json" with { type: "json" };
 
-const describeAnvil = process.env.RUN_ANVIL_TESTS === "1" ? describe : describe.skip;
 const rpcUrl = "http://127.0.0.1:18545";
 const chain = {
   id: 31337,
@@ -37,7 +36,7 @@ async function waitForAnvilReady(client: ReturnType<typeof createPublicClient>) 
   throw new Error("Anvil did not become ready in time");
 }
 
-describeAnvil("preflight contract-backed integration", () => {
+describe("preflight contract-backed integration", () => {
   beforeAll(async () => {
     anvil = spawn("anvil", ["--host", "127.0.0.1", "--port", "18545", "--chain-id", "31337"], {
       stdio: "ignore",

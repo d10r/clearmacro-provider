@@ -3,6 +3,11 @@ import { Value } from "@sinclair/typebox/value";
 import type { Registry, RegistryChain } from "./schema.js";
 import { RegistrySchema } from "./schema.js";
 
+function formatRegistrySchemaErrors(parsed: unknown): string {
+  const errors = [...Value.Errors(RegistrySchema, parsed)];
+  return errors.map((e) => `${e.path.slice(1) || "(root)"}: ${e.message}`).join("; ");
+}
+
 function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
@@ -12,13 +17,15 @@ export type LoadedRegistry = {
   chainsById: Map<number, RegistryChain>;
   /** Populated at startup after querying OpenZeppelin Relayer. */
   relayerIdByChainId: Map<number, string>;
+  /** Populated at startup with `required_confirmations` from the bound relayer network (per chain). */
+  requiredConfirmationsByChainId: Map<number, number>;
 };
 
 export function loadRegistry(registryPath: string): LoadedRegistry {
   const file = readFileSync(registryPath, "utf8");
   const parsed = JSON.parse(file) as unknown;
   if (!Value.Check(RegistrySchema, parsed)) {
-    throw new Error("Invalid registry JSON");
+    throw new Error(`Invalid registry JSON: ${formatRegistrySchemaErrors(parsed)}`);
   }
   const registry = parsed as Registry;
 
@@ -34,7 +41,7 @@ export function loadRegistry(registryPath: string): LoadedRegistry {
     chainsById.set(chain.chainId, chain);
   }
 
-  return { raw: registry, chainsById, relayerIdByChainId: new Map() };
+  return { raw: registry, chainsById, relayerIdByChainId: new Map(), requiredConfirmationsByChainId: new Map() };
 }
 
 export function getChain(registry: LoadedRegistry, chainId: number): RegistryChain | undefined {

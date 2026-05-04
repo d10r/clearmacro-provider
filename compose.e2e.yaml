@@ -1,0 +1,88 @@
+# Full stack for RUN_STACK_E2E=1 (see test/e2e/relay-stack.e2e.test.ts).
+# Vitest sets E2E_ANVIL_PORT, E2E_APP_PORT, E2E_STACK_CONFIG_DIR, E2E_OZ_RELAYER_API_KEY, etc.
+
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint:
+      - anvil
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "31337"
+      - --block-time
+      - "1"
+    ports:
+      - "${E2E_ANVIL_PORT:?E2E_ANVIL_PORT required}:8545"
+
+  redis:
+    image: redis:7-bookworm
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - e2e-oz-redis:/data
+
+  oz-relayer:
+    image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
+    depends_on:
+      - redis
+      - anvil
+    ports:
+      - "${E2E_OZ_HOST_PORT:?E2E_OZ_HOST_PORT required}:8080"
+    environment:
+      APP_PORT: 8080
+      METRICS_PORT: 8081
+      METRICS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      REPOSITORY_STORAGE_TYPE: redis
+      RESET_STORAGE_ON_START: "false"
+      STORAGE_ENCRYPTION_KEY: ${OZ_STORAGE_ENCRYPTION_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      API_KEY: ${E2E_OZ_RELAYER_API_KEY:?E2E_OZ_RELAYER_API_KEY required}
+      WEBHOOK_SIGNING_KEY: ${OZ_WEBHOOK_SIGNING_KEY:-e2e-webhook-signing-key-32chars-min}
+      KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:-change-me}
+      OZ_KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:-change-me}
+      LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
+      IN_DOCKER: "true"
+      RPC_BLOCK_PRIVATE_IPS: "false"
+    volumes:
+      - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/app/config:ro
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Named volume /data is root-owned by default; SQLite needs write access for migrations.
+    user: "0:0"
+    depends_on:
+      - redis
+      - oz-relayer
+      - anvil
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DATABASE_PATH: /data/clearmacro-e2e.sqlite
+      REGISTRY_PATH: /stack/registry.json
+      OZ_RELAYER_URL: http://oz-relayer:8080
+      OZ_RELAYER_API_KEY: ${E2E_OZ_RELAYER_API_KEY:?E2E_OZ_RELAYER_API_KEY required}
+      PROVIDER_NAME: macros.superfluid.eth
+      RUN_MIGRATIONS_ON_START: "true"
+      RELAYER_WORKER_ENABLED: "true"
+      RELAYER_WORKER_POLL_INTERVAL_MS: "500"
+      RELAYER_WORKER_BATCH_SIZE: "5"
+      API_AUTH_ENABLED: "false"
+      LOG_LEVEL: info
+    ports:
+      - "${E2E_APP_PORT:?E2E_APP_PORT required}:3000"
+    volumes:
+      - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/stack:ro
+      - e2e-app-data:/data
+
+volumes:
+  e2e-oz-redis:
+  e2e-app-data:

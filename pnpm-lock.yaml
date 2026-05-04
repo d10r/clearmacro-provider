@@ -29,6 +29,9 @@ importers:
       '@sinclair/typebox':
         specifier: ^0.34.49
         version: 0.34.49
+      '@superfluid-finance/metadata':
+        specifier: ^1.6.2
+        version: 1.6.2
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -48,6 +51,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.2.1)
+      '@superfluid-finance/ethereum-contracts':
+        specifier: link:/home/didi/src/sf/protocol-monorepo/packages/ethereum-contracts
+        version: link:../protocol-monorepo/packages/ethereum-contracts
       '@types/node':
         specifier: ^24.12.2
         version: 24.12.2
@@ -521,6 +527,9 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@superfluid-finance/metadata@1.6.2':
+    resolution: {integrity: sha512-oxKBlzMNl2hX6tF0ot8W4kJ86pmtq3DFaoalsguBuIOGmrp7nGAvQ7nYRmd3WDu+vGwrgQYyBlIKSEuPy8addg==}
 
   '@tybys/wasm-util@0.10.1':
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
@@ -1820,6 +1829,8 @@ snapshots:
   '@sinclair/typebox@0.34.49': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@superfluid-finance/metadata@1.6.2': {}
 
   '@tybys/wasm-util@0.10.1':
     dependencies:

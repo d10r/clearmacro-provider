@@ -32,6 +32,7 @@ function makeRegistry(rpcUrl: string) {
   );
   const registry = loadRegistry(registryPath);
   registry.relayerIdByChainId.set(1, "relayer-main");
+  registry.requiredConfirmationsByChainId.set(1, 1);
   return registry;
 }
 

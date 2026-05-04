@@ -2,6 +2,10 @@ import type { LoadedRegistry } from "./registry.js";
 import type { OzNetwork, OzRelayerClient } from "../relayer/client.js";
 
 export function parseEvmChainIdFromNetwork(network: OzNetwork): number | null {
+  const chainId = network.chain_id;
+  if (typeof chainId === "number" && Number.isInteger(chainId) && chainId >= 1) {
+    return chainId;
+  }
   const id = network.id ?? "";
   const eip155 = /^eip155:(\d+)$/i.exec(id);
   if (eip155) {
@@ -65,5 +69,27 @@ export async function bindRelayersToRegistry(registry: LoadedRegistry, client: O
       );
     }
     registry.relayerIdByChainId.set(chainId, matches[0]!);
+  }
+
+  registry.requiredConfirmationsByChainId.clear();
+  for (const chainId of registry.chainsById.keys()) {
+    const relayerId = registry.relayerIdByChainId.get(chainId);
+    if (!relayerId) {
+      throw new Error(`Internal: missing relayer id binding for chainId ${chainId}`);
+    }
+    const details = await client.getRelayer(relayerId);
+    if (!details.network_type || !details.network) {
+      throw new Error(
+        `OpenZeppelin relayer ${relayerId} for registry chainId ${chainId} is missing network_type/network; cannot read required_confirmations`,
+      );
+    }
+    const network = await client.getNetwork(details.network_type, details.network);
+    const rc = network.required_confirmations;
+    if (rc == null || typeof rc !== "number" || !Number.isInteger(rc) || rc < 1) {
+      throw new Error(
+        `OpenZeppelin network for registry chainId ${chainId} returned invalid required_confirmations (expected positive integer)`,
+      );
+    }
+    registry.requiredConfirmationsByChainId.set(chainId, rc);
   }
 }

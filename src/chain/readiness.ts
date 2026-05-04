@@ -164,23 +164,6 @@ export async function evaluateChainReadiness(input: {
   }
 }
 
-export async function fetchRelayerRequiredConfirmations(input: {
-  registry: LoadedRegistry;
-  chainId: number;
-  relayerClient: OzRelayerClient;
-}): Promise<number | null> {
-  const relayerId = input.registry.relayerIdByChainId.get(input.chainId);
-  if (!relayerId) {
-    return null;
-  }
-  const relayer = await input.relayerClient.getRelayer(relayerId);
-  if (!relayer.network_type || !relayer.network) {
-    return null;
-  }
-  const network = await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
-  return network.required_confirmations ?? null;
-}
-
 export async function validateRelaySignature(input: {
   registry: LoadedRegistry;
   chainId: number;

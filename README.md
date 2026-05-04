@@ -64,9 +64,16 @@ Optional `forceExecuteAfterPreflightRevert: true` creates a **`pending`** execut
 Minimal v1 shape:
 
 - `version`: `1`
-- `chains[]`: `chainId`, `forwarderAddress`, `allowedMacros[]` with `{ domain, address }`, optional `rpcUrls[]` for digest, signature, preflight, and readiness.
+- `chains[]`: `chainId`, `forwarderAddress`, **`rpcUrls`** (non-empty array of at least one URL), `allowedMacros[]` with `{ domain, address }` (may be empty until macros are deployed). RPCs are used for digest reads, signature checks, preflight, and readiness.
 
 Only chains present in `chains[]` are supported; leave chains you do not relay out of the file.
+
+**Superfluid-wide templates** (from `@superfluid-finance/metadata`: MacroForwarder per chain, `publicRPCs` as `rpcUrls`, empty `allowedMacros`):
+
+- `config/registry.superfluid-mainnets.json` — mainnets only (typical production starting point).
+- `config/registry.superfluid-all.json` — mainnets + testnets.
+
+Regenerate after a metadata upgrade: `pnpm run registry:gen:superfluid` and `pnpm run registry:gen:superfluid -- --out config/registry.superfluid-mainnets.json --mainnet-only`. For production traffic, replace `rpcUrls` with your own RPC provider URLs.
 
 ## Local development
 
@@ -95,8 +102,8 @@ pnpm run build
 ## Production deployment
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, and if using auth, `API_CLIENTS_JSON`.
-2. **`config/registry.json`** — production chains, forwarders, RPC URLs, and allowed `(domain, macroContract)` pairs.
-3. **OpenZeppelin Relayer** — config and keystores under `config/oz-relayer/` (see `config/oz-relayer/README.md`). Signers must be funded on every chain you relay on.
+2. **`config/registry.json`** — copy or derive from `config/registry.superfluid-mainnets.json` (or `registry.superfluid-all.json`), then set `rpcUrls` and `allowedMacros` for your deployment.
+3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
 5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.

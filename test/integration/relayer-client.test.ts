@@ -107,6 +107,7 @@ describe("oz relayer client", () => {
             data: {
               id: "evm:mainnet",
               network_type: "evm",
+              chain_id: 42161,
               required_confirmations: 1,
             },
             error: null,
@@ -118,5 +119,6 @@ describe("oz relayer client", () => {
     const client = new OzRelayerClient(baseUrl, "token", 200);
     const network = await client.getNetwork("evm", "mainnet");
     expect(network.required_confirmations).toBe(1);
+    expect(network.chain_id).toBe(42161);
   });
 });

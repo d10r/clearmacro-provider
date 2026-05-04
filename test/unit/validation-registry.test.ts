@@ -72,4 +72,33 @@ describe("assertMacroAllowed", () => {
       expect(r.code).toBe("CHAIN_NOT_ALLOWED");
     }
   });
+
+  it("rejects every macro when allowlist is empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "val-reg-empty-"));
+    const path = join(dir, "registry.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0x0000000000000000000000000000000000000001",
+            rpcUrls: ["http://localhost:8545"],
+            allowedMacros: [],
+          },
+        ],
+      }),
+    );
+    const registry = loadRegistry(path);
+    const r = assertMacroAllowed(registry, {
+      chainId: 1,
+      domain: "any.domain",
+      macroAddress: "0x00000000000000000000000000000000000000aa",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe("MACRO_NOT_ALLOWED");
+    }
+  });
 });

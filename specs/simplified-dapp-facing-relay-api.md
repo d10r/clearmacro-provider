@@ -74,7 +74,7 @@ type Registry = {
   chains: Array<{
     chainId: number;
     forwarderAddress: `0x${string}`;
-    rpcUrls?: string[];
+    rpcUrls: string[];
     allowedMacros: Array<{
       domain: string;
       address: `0x${string}`;
@@ -89,10 +89,10 @@ Rules:
 - `forwarderAddress` is per chain while only `clearMacroV1` exists. Reintroduce a kind-keyed forwarder map only when multiple relay kinds are actually implemented.
 - `allowedMacros` is the core policy. It is keyed by both `payload.security.domain` and `payload.security.macroContract`, not by address alone.
 - A request is allowed only if the decoded `(domain, macroContract)` pair exactly matches an entry in `allowedMacros` for the requested chain.
-- `rpcUrls` are optional app RPC overrides used for digest reads, signature checks, readiness checks, and preflight. If omitted, the app may use known chain defaults from its chain library. Unknown chains without `rpcUrls` are invalid configuration.
+- `rpcUrls` must list at least one explicit RPC URL per chain. The provider does not substitute chain-library defaults; invalid or missing URLs fail registry load.
 - Do not include `providerName`; it is deployment-global config.
 - Do not include `ozRelayerId`; the app should discover the matching OZ Relayer resource at startup/readiness by querying OpenZeppelin Relayer and matching EVM `chain_id` to `chainId`. Startup/readiness must fail if zero or multiple active relayers match a chain, unless an explicit operational override is provided outside this registry.
-- Do not include confirmations. Use the matched OpenZeppelin Relayer network's `required_confirmations` as the source of truth for finality. If OZ does not expose this for a chain, fall back to a conservative app default or require an operational override outside this registry.
+- Do not include confirmations in the registry. Read the matched OpenZeppelin Relayer network's `required_confirmations` **once at startup** when binding relayers to the registry and persist that value with new relay executions. Startup must fail if OZ does not return a positive integer for a bound chain.
 - Do not include chain names, macro names, macro enabled flags, per-chain provider names, client policy, or speculative future relay kinds.
 
 ## Public State Machine

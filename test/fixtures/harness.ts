@@ -85,6 +85,7 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
   const registryPath = writeRegistryFixture(dir);
   const registry = loadRegistry(registryPath);
   registry.relayerIdByChainId.set(1, "relayer-main");
+  registry.requiredConfirmationsByChainId.set(1, 1);
   const db = openDatabase(join(dir, "app.sqlite"));
   runMigrations(db);
   const executions = new RelayExecutionRepository(db);

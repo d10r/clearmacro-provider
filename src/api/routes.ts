@@ -21,7 +21,7 @@ import type {
 import { projectRelayerState } from "../relayer/mapper.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import { hashCanonicalCreateBody } from "./canonicalBody.js";
-import { preflightRunMacro, fetchRelayerRequiredConfirmations } from "../chain/readiness.js";
+import { preflightRunMacro } from "../chain/readiness.js";
 import type { RegistryChain } from "../config/schema.js";
 
 export type RegisterRoutesDeps = {
@@ -391,16 +391,10 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
         metadata.forceSubmittedAfterPreflightRevert = "true";
       }
 
-      let requiredConfirmations: number | null;
-      try {
-        requiredConfirmations = await fetchRelayerRequiredConfirmations({
-          registry: deps.registry,
-          chainId: body.chainId,
-          relayerClient: deps.relayerClient,
-        });
-      } catch {
+      const requiredConfirmations = deps.registry.requiredConfirmationsByChainId.get(body.chainId);
+      if (requiredConfirmations === undefined) {
         deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null, digest });
-        throw new ApiError(503, "RELAYER_UNAVAILABLE", "Unable to read relayer network finality policy.", "relayer", true);
+        throw new ApiError(503, "RELAYER_UNAVAILABLE", "Relayer finality policy is not bound for this chain.", "relayer", true);
       }
 
       const forceAfterPreflightRevert = preflightResult === "deterministic_revert" && forceRequested ? 1 : 0;

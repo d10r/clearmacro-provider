@@ -1,15 +1,16 @@
 {
   "networks": [
     {
-      "network": "localhost-anvil",
+      "network": "base-mainnet",
       "type": "evm",
-      "chain_id": 31337,
-      "is_testnet": true,
+      "chain_id": 8453,
+      "is_testnet": false,
       "required_confirmations": 1,
       "average_blocktime_ms": 2000,
       "symbol": "ETH",
       "rpc_urls": [
-        "http://anvil:8545"
+        "https://base-mainnet.rpc.x.superfluid.dev",
+        "https://developer-access-mainnet.base.org"
       ]
     }
   ]

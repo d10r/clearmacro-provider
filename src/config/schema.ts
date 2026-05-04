@@ -8,13 +8,13 @@ export const RegistrySchema = Type.Object({
     Type.Object({
       chainId: Type.Integer({ minimum: 1 }),
       forwarderAddress: Type.String({ pattern: addressPattern }),
-      rpcUrls: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })),
+      rpcUrls: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
       allowedMacros: Type.Array(
         Type.Object({
           domain: Type.String({ minLength: 1 }),
           address: Type.String({ pattern: addressPattern }),
         }),
-        { minItems: 1 },
+        { minItems: 0 },
       ),
     }),
     { minItems: 1 },

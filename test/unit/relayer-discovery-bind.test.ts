@@ -33,7 +33,10 @@ function mockClient(handlers: {
     network_type?: string | null;
     network?: string | null;
   }>;
-  getNetwork: (type: string, net: string) => Promise<{ id: string; network_type: string; required_confirmations: number }>;
+  getNetwork: (
+    type: string,
+    net: string,
+  ) => Promise<{ id: string; network_type: string; chain_id?: number; required_confirmations: number | null }>;
 }): OzRelayerClient {
   return {
     listRelayerIds: handlers.listRelayerIds,
@@ -62,6 +65,7 @@ describe("bindRelayersToRegistry", () => {
     });
     await bindRelayersToRegistry(registry, client);
     expect(registry.relayerIdByChainId.get(1)).toBe("r-main");
+    expect(registry.requiredConfirmationsByChainId.get(1)).toBe(1);
   });
 
   it("throws when no relayer matches a configured chain", async () => {
@@ -122,5 +126,72 @@ describe("bindRelayersToRegistry", () => {
       }),
     });
     await expect(bindRelayersToRegistry(registry, client)).rejects.toThrow(/No active OpenZeppelin relayer matches/);
+  });
+
+  it("stores required_confirmations from the bound relayer network", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bind-rc-"));
+    const registry = loadRegistry(writeMinimalRegistry(dir));
+    const client = mockClient({
+      listRelayerIds: async () => ["r-main"],
+      getRelayer: async () => ({
+        paused: false,
+        system_disabled: false,
+        network_type: "evm",
+        network: "1",
+      }),
+      getNetwork: async () => ({
+        id: "eip155:1",
+        network_type: "evm",
+        required_confirmations: 12,
+      }),
+    });
+    await bindRelayersToRegistry(registry, client);
+    expect(registry.requiredConfirmationsByChainId.get(1)).toBe(12);
+  });
+
+  it("binds when OZ exposes chain_id even if id is not a numeric eip155/evm pattern", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bind-chain-id-"));
+    const registry = loadRegistry(writeMinimalRegistry(dir));
+    const client = mockClient({
+      listRelayerIds: async () => ["r-main"],
+      getRelayer: async () => ({
+        paused: false,
+        system_disabled: false,
+        network_type: "evm",
+        network: "mainnet",
+      }),
+      getNetwork: async () => ({
+        id: "evm:mainnet",
+        network_type: "evm",
+        chain_id: 1,
+        required_confirmations: 2,
+      }),
+    });
+    await bindRelayersToRegistry(registry, client);
+    expect(registry.relayerIdByChainId.get(1)).toBe("r-main");
+    expect(registry.requiredConfirmationsByChainId.get(1)).toBe(2);
+  });
+
+  it("throws when required_confirmations is not a positive integer after relayer match", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bind-bad-rc-"));
+    const registry = loadRegistry(writeMinimalRegistry(dir));
+    let getNetworkCalls = 0;
+    const client = mockClient({
+      listRelayerIds: async () => ["r-main"],
+      getRelayer: async () => ({
+        paused: false,
+        system_disabled: false,
+        network_type: "evm",
+        network: "1",
+      }),
+      getNetwork: async () => {
+        getNetworkCalls++;
+        if (getNetworkCalls === 1) {
+          return { id: "eip155:1", network_type: "evm", required_confirmations: 1 };
+        }
+        return { id: "eip155:1", network_type: "evm", required_confirmations: 0 };
+      },
+    });
+    await expect(bindRelayersToRegistry(registry, client)).rejects.toThrow(/invalid required_confirmations/);
   });
 });

@@ -1,311 +1,570 @@
-# ClearMacro Provider Backend: Advanced Test Plan
+# ClearMacro Provider: Production Hardening Test Plan
 
-> **Note:** Stretches goals beyond the current test suite. Baseline coverage lives in `test/unit`, `test/integration`, and `test/e2e`; this document remains aspirational.
+## Purpose
 
-## Goal
+This document is the implementation checklist for hardening the current API defined in `specs/simplified-dapp-facing-relay-api.md`.
 
-Define advanced test suites that harden the ClearMacro Provider beyond the milestone-level coverage in `specs/implementation-plan.md`.
-
-This plan focuses on correctness under concurrency, partial outages, policy complexity, schema evolution, and OpenZeppelin Relayer adapter compatibility. It is intentionally layered so fast/high-value tests can run during v1 implementation while expensive stress and upgrade tests wait until the baseline is stable.
-
-## Scope
-
-These tests are additive. They do not replace milestone tests from the implementation plan and do not introduce new runtime features.
-
-Advanced suites in this document:
-
-1. Concurrency and race-condition tests.
-2. Readiness matrix and degraded-mode tests.
-3. Auth and client policy negative tests.
-4. Preflight edge-case and classification tests.
-5. State-machine invariants and property tests.
-6. Migration compatibility and upgrade-path tests.
-7. OpenZeppelin Relayer adapter contract tests.
-8. ABI and ClearMacro fixture compatibility tests.
-
-## Test Environment Strategy
-
-Use a layered strategy so fast tests run often and expensive tests run on gated schedules.
-
-- Unit/property tests with small deterministic seeds: run on every PR.
-- Integration tests (SQLite + mocked relayer/RPC): run on every PR.
-- Local-chain tests (Anvil + OZ Relayer + Redis): run in CI if stable; otherwise nightly.
-- Upgrade fixture tests: nightly + release candidates once there is a released schema to upgrade from.
-- Stress/concurrency suites: nightly and before production rollout.
-
-Do not add Docker-only tests to the default `pnpm test` path. Docker-dependent tests should have explicit commands or CI jobs.
-
-## Suite A: Concurrency and Race Conditions
-
-### Objectives
-
-- Verify idempotency and semantic duplicate protections under parallel load.
-- Verify worker claim/submit logic does not create duplicate submissions.
-- Verify request terminality and audit consistency under concurrent poll/update.
-
-### Required Scenarios
-
-1. **Parallel idempotent replay**
-   - Send N parallel `POST /v1/relay` requests with same client, same idempotency key, same body.
-   - Expect exactly one row in `relay_requests`.
-   - Expect all responses reference the same `requestId` (or first accepted + deterministic replay behavior).
-
-2. **Parallel idempotency conflict**
-   - Send N parallel requests with same client and idempotency key but different body hashes.
-   - Expect exactly one canonical winner; others return `409 IDEMPOTENCY_CONFLICT`.
-   - Confirm no second request row is created.
-
-3. **Parallel semantic duplicates without idempotency key**
-   - Send N parallel requests with identical semantic tuple `(chain_id, forwarder, macro, signer, clear_macro_nonce)`.
-   - Expect one accepted request; duplicates rejected as configured.
-   - Validate DB uniqueness violation is translated to stable API error code.
-
-4. **Worker claim resistance**
-   - Run two worker loops concurrently against the same SQLite DB in a test harness.
-   - This is a defensive test for accidental duplicate workers, not a requirement to support horizontally scaled app instances in v1.
-   - Ensure each request is submitted to relayer at most once in the normal success path.
-   - Confirm audit events show one submit path per request.
-
-5. **Poll-update contention**
-   - Simulate concurrent relayer status polls for same `oz_transaction_id`.
-   - Ensure no invalid transitions and no duplicate terminal transitions.
-
-### Exit Criteria
-
-- Zero duplicate relayer submissions for a request.
-- No illegal state transitions.
-- Deterministic API errors under contention.
-- No requirement is created for multi-process distributed queue semantics beyond SQLite transactional claiming.
-
-## Suite B: Readiness Matrix and Degraded Modes
-
-### Objectives
-
-- Validate global `/readyz` semantics and per-chain request acceptance behavior.
-- Validate error-code accuracy under partial dependency outages.
-
-### Required Matrix
-
-Cover at least these dimensions:
-
-- SQLite: available/open failure/write failure.
-- Chain enabled: true/false.
-- App RPC health per chain: healthy/unhealthy.
-- OZ relayer health: healthy/unhealthy.
-- Signer gas balance: >0 / 0.
-- Confirmation alignment: aligned/misaligned.
-
-### Required Assertions
-
-1. `/readyz` fails when any enabled chain is not ready.
-2. `POST /v1/relay` for chain X succeeds if chain X is ready, even if chain Y is unready, unless shared dependencies are down.
-3. Disabled chain returns `403 CHAIN_NOT_ALLOWED`.
-4. Enabled-but-unready chain returns `503 PROVIDER_NOT_READY` or `503 RELAYER_UNAVAILABLE` per policy.
-5. SQLite open/write failure causes global unavailability and no partial request persistence.
-
-### Exit Criteria
-
-- Every tested matrix row has a single expected HTTP code and state outcome.
-- No scenario returns ambiguous 500-class errors for known dependency failures.
-
-## Suite C: Auth and Client Policy Negative Coverage
-
-### Objectives
-
-- Verify auth behavior is strict and policy scoping is enforced.
-- Verify idempotency namespace behavior differs correctly with auth enabled/disabled.
-
-### Required Scenarios
-
-1. Missing bearer token when auth is enabled -> `401 UNAUTHORIZED`.
-2. Invalid token hash match -> `401 UNAUTHORIZED`.
-3. Disabled client -> `403 CLIENT_NOT_ALLOWED`.
-4. Client not allowed for chain/provider/macro -> `403 CLIENT_NOT_ALLOWED`.
-5. Auth disabled shared namespace behavior:
-   - Two callers reusing same idempotency key and body map to same anonymous scope behavior.
-6. Auth enabled isolated namespace behavior:
-   - Same idempotency key reused by different clients does not conflict unless request semantics collide.
-
-### Exit Criteria
-
-- No auth bypasses.
-- Policy-denied requests never create accepted rows.
-
-## Suite D: Preflight Edge Cases and Classification
-
-### Objectives
-
-- Validate deterministic classification between `preflight_failed`, retriable queued behavior, and terminal submit failures.
-- Validate RPC failover and fallback behavior in preflight path.
-
-### Required Scenarios
-
-1. Deterministic revert in simulation -> terminal `preflight_failed`.
-2. RPC timeout on first endpoint, success on second -> request continues, no terminal failure.
-3. All RPCs unavailable before persistence -> `503 CHAIN_UNAVAILABLE`.
-4. All RPCs unavailable after persistence -> remains `queued`, audit event appended, later retry succeeds.
-5. Preflight pass followed by real onchain revert -> final `reverted` (not `preflight_failed`).
-6. Preflight disabled by config, if such a switch exists later -> request may submit without simulation and still finalizes through relayer status.
-
-### Exit Criteria
-
-- Each failure mode maps to the exact intended state/error code.
-- RPC endpoint names (not URLs) appear in logs/audit details where relevant.
-
-## Suite E: State-Machine Invariants and Property Tests
-
-### Objectives
-
-- Guarantee lifecycle correctness independent of specific test fixtures.
-- Detect accidental regressions in transition logic.
-
-### Invariants
-
-1. Terminal states never transition.
-2. Every persisted state transition is in the allowed transition set.
-3. `terminal=1` if and only if state is terminal.
-4. `terminal_at` is set exactly once for terminal transitions.
-5. `current_tx_hash` changes only via relayer status projection.
-6. Request and audit updates in a transition are atomic.
-
-### Property Tests
-
-- Generate random valid sequences of relayer status updates and transient polling errors.
-- Project them through lifecycle mapper.
-- Assert invariants hold for all generated sequences.
-
-### Exit Criteria
-
-- Invariant suite passes across randomized seeds in CI.
-- Any counterexample emits a reproducible seed.
-
-## Suite F: Migration Compatibility and Upgrade Path
-
-### Objectives
-
-- Ensure schema changes remain forward-safe and operationally predictable.
-- Ensure migration runner behavior is deterministic and idempotent.
-
-### Required Scenarios
-
-1. Fresh DB migration from empty file -> latest schema.
-2. Re-running migrations on latest schema is a no-op.
-3. Upgrade from previous released schema fixtures with realistic data once a previous release exists:
-   - accepted, queued, pending, terminal requests;
-   - relayer_transactions rows;
-   - audit_events history.
-4. Upgrade with representative table sizes to assess lock times and migration runtime.
-5. Roll-forward recovery:
-   - interrupted migration process is recoverable by rerun (no corruption).
-
-### Data Fixture Requirements
-
-- Store versioned SQLite fixtures in `test/fixtures/migrations/`.
-- Include synthetic edge rows (null/optional fields, high metadata volume, long error payloads).
-
-### Exit Criteria
-
-- No data loss in upgraded fixtures.
-- All indexes/constraints present post-upgrade.
-- Application boots and worker resumes with upgraded DB.
-
-## Suite G: OpenZeppelin Relayer Adapter Contract
-
-### Objectives
-
-- Prevent drift between the app's relayer client and the OpenZeppelin Relayer API shape observed in the spike.
-- Validate adapter behavior without depending on a live relayer for every PR.
-
-### Required Scenarios
-
-1. Submit transaction success:
-   - Mock `POST /api/v1/relayers/{ozRelayerId}/transactions` returning `success: true` and an `OzTransaction`.
-   - Expect `oz_transaction_id` persisted and request transitions to `pending`.
-2. Submit transaction 4xx:
-   - Mock relayer validation error.
-   - Expect `submit_failed` after non-retryable classification.
-3. Submit transaction transient failures:
-   - Mock timeout/429/5xx followed by success.
-   - Expect retry and one persisted relayer transaction ID.
-4. Poll status mapping:
-   - Mock `pending`, `submitted`, `confirmed`, `failed` with revert reason, `failed` without revert reason, `canceled`, and `expired`.
-   - Expect canonical request states from `specs/implementation-plan.md`.
-5. Relayer details/readiness:
-   - Mock relayer details with `paused`, `system_disabled`, missing address, and usable address variants.
-   - Expect readiness classification and signer-balance checks to use the returned address.
-6. Raw relayer JSON retention:
-   - Ensure raw relayer payload is stored internally in `relayer_transactions.raw_json`.
-   - Ensure raw relayer payload is not returned in public request status responses.
-
-### Exit Criteria
-
-- Adapter tests define the app's supported OZ API subset.
-- A breaking API-shape change fails tests before runtime.
-
-## Suite H: ABI and ClearMacro Fixture Compatibility
-
-### Objectives
-
-- Ensure the app encodes and decodes ClearMacro data exactly as the contracts expect.
-- Prevent drift from `IClearMacroForwarderV1.sol`.
-
-### Required Scenarios
-
-1. Payload decode fixture:
-   - Use known ABI-encoded `IClearMacroForwarderV1.Payload` fixture.
-   - Assert `action.params`, `security.domain`, `security.macroContract`, `security.provider`, `validAfter`, `validBefore`, and `nonce` are decoded correctly.
-2. `runMacro` calldata fixture:
-   - Encode `runMacro(macro, params, signer, signature)` and compare to a checked fixture generated from viem or Foundry.
-3. Digest/signature validation fixture:
-   - Mock or fork-call `getDigest(macro, params)`.
-   - Assert EOA signature recovery validates the expected signer.
-4. Invalid signer fixture:
-   - Same payload with a signature from another key -> `SIGNATURE_INVALID`.
-5. Provider `self` fixture:
-   - Payload with `security.provider = "self"` -> rejected before persistence.
-
-### Exit Criteria
-
-- ABI fixtures pass without requiring a live production chain.
-- Any future contract ABI mismatch is caught by fixture updates.
-
-## CI and Execution Policy
-
-Suggested job tiers:
-
-- `test:core` (required on PR): baseline unit + integration + fast advanced subsets.
-- `test:advanced` (nightly): full suites A-E and G-H with medium property seeds.
-- `test:migrations` (nightly + RC): suite F with all fixtures.
-- `test:soak` (manual/pre-release): high-volume concurrency and long-running worker tests.
-
-Keep flaky tests quarantined but visible. No silent skips.
-
-## Reporting and Artifacts
-
-Each advanced suite should produce:
-
-- Structured result summary (pass/fail + counts + duration).
-- Failure artifacts: request/response payloads, relevant DB snapshots, and relayer mocks/log snippets.
-- Reproduction command for each failed scenario.
-
-Suggested output location:
-
-```text
-test-artifacts/advanced/
-```
-
-## Deferred Implementation Checklist
-
-Before implementing this plan:
-
-- Baseline v1 milestone tests must be green and stable.
-- Worker lifecycle mapper must be finalized.
-- A deterministic test harness for mocked RPC and relayer endpoints must exist.
-- CI must support nightly jobs and artifact retention.
+It is intentionally precise: each section names the implementation files, the test files, the expected assertions, and the command that must pass before moving on.
 
 ## Non-Goals
 
-- This document does not introduce new runtime features.
-- This document does not change the canonical request state machine.
-- This document does not require multi-region or distributed-queue architecture changes.
-- This document does not require public operator replacement/cancel APIs.
+- Do not add backward-compatible migrations for pre-production schemas.
+- Do not reintroduce `Idempotency-Key`.
+- Do not reintroduce client-provided `forwarderAddress`.
+- Do not reintroduce nonce-based semantic deduplication.
+- Do not expose macros from `GET /v1/capabilities`.
+- Do not expose OpenZeppelin Relayer IDs, transaction IDs, raw statuses, raw payloads, or raw signatures through public dapp API responses.
+- Do not add client policy back into the provider registry.
+
+## Required Verification Commands
+
+Run these after every completed section:
+
+```sh
+pnpm run typecheck
+pnpm test
+```
+
+Before marking the implementation production-ready, also run:
+
+```sh
+pnpm run build
+```
+
+## Section 1: Relayer Discovery Must Match OZ `chain_id`
+
+### Risk
+
+OpenZeppelin Relayer network responses expose the EVM chain ID as `chain_id`. The app must not rely only on synthetic `id` strings such as `eip155:1` or `evm:1`.
+
+If discovery misses `chain_id`, startup/readiness can fail even when OZ Relayer is correctly configured.
+
+### Implementation Files
+
+- `src/config/relayerDiscovery.ts`
+- `src/relayer/client.ts`
+
+### Test Files
+
+- `test/unit/relayer-discovery-bind.test.ts`
+- `test/integration/relayer-client.test.ts`
+
+### Required Tests
+
+1. `parseEvmChainIdFromNetwork` returns `1` for:
+
+```ts
+{ chain_id: 1, id: "evm:mainnet", network_type: "evm", required_confirmations: 1 }
+```
+
+2. `parseEvmChainIdFromNetwork` still accepts fallback IDs:
+
+```ts
+{ id: "eip155:1", network_type: "evm", required_confirmations: 1 }
+{ id: "evm:1", network_type: "evm", required_confirmations: 1 }
+```
+
+3. `bindRelayersToRegistry` binds a relayer when `getNetwork` returns `chain_id: 1`, even if `id` is not parseable as a numeric chain ID.
+
+4. `bindRelayersToRegistry` still throws when zero active relayers match a configured chain.
+
+5. `bindRelayersToRegistry` still throws when multiple active relayers match the same configured chain.
+
+6. `OzRelayerClient.getNetwork` preserves `chain_id` from the OZ envelope.
+
+### Command
+
+```sh
+pnpm test test/unit/relayer-discovery-bind.test.ts test/integration/relayer-client.test.ts
+```
+
+## Section 2: Duplicate Replay Must Require A Valid Signature
+
+### Risk
+
+Digest-based deduplication is a UX/retry feature, not an authorization bypass. A caller must not be able to retrieve or infer an existing execution by submitting an invalid signature for an existing digest.
+
+### Implementation Files
+
+- `src/api/routes.ts`
+- `src/db/repositories.ts`
+
+### Test Files
+
+- `test/integration/api.test.ts`
+- `test/e2e/relay-api.e2e.test.ts`
+
+### Required Tests
+
+1. First request with valid signature creates `202`.
+
+2. Second request with same `(chainId, forwarderAddress, signerAddress, digest)` but invalid signature returns:
+
+```text
+422 SIGNATURE_INVALID
+```
+
+It must not return `200`.
+
+3. Same request with valid signature still returns:
+
+```text
+200 existing execution
+```
+
+4. Cross-client duplicate with valid signature still returns:
+
+```text
+409 DUPLICATE_EXECUTION
+error.executionId = null
+```
+
+5. The invalid-signature replay attempt writes an audit row with:
+
+```text
+outcome_code = SIGNATURE_INVALID
+execution_id = null
+```
+
+6. The invalid-signature replay response must not leak the existing execution ID in the body.
+
+### Command
+
+```sh
+pnpm test test/integration/api.test.ts test/e2e/relay-api.e2e.test.ts
+```
+
+## Section 3: Public Events Must Be Sanitized
+
+### Risk
+
+`include=events` is part of the public dapp API. It must not leak internal relayer IDs, OZ transaction IDs, raw OZ statuses, raw request payloads, or signatures.
+
+### Implementation Files
+
+- `src/api/routes.ts`
+- `src/db/repositories.ts`
+- `src/relayer/worker.ts`
+
+### Test Files
+
+- `test/integration/api.test.ts`
+- `test/e2e/relay-api.e2e.test.ts`
+
+### Required Tests
+
+1. Create an execution, run a worker tick that appends a relayer submission event, then call:
+
+```text
+GET /v1/relay-executions/:id?include=events
+```
+
+2. Public events may include:
+
+```ts
+type PublicRelayExecutionEvent = {
+  type: string;
+  actor: string;
+  reason: string;
+  createdAt: string;
+};
+```
+
+3. Public events must not include:
+
+- internal event ID
+- `executionId`
+- `ozTransactionId`
+- `ozRelayerId`
+- raw OZ status
+- raw OZ response JSON
+- raw request payload
+- raw signature
+- `detailsJson` containing unsanitized internal fields
+
+4. Internal DB rows may still keep unsanitized details for operations.
+
+5. Add a regression assertion that the serialized public response string does not contain:
+
+```text
+ozTransactionId
+ozRelayerId
+oz-tx
+relayer-main
+signature
+payload
+```
+
+### Command
+
+```sh
+pnpm test test/integration/api.test.ts test/e2e/relay-api.e2e.test.ts
+```
+
+## Section 4: Transient Submit Errors Must Not Produce Malformed Public Errors
+
+### Risk
+
+Transient submit failures are retry bookkeeping. They must not appear as malformed public `error` objects missing `category` or `retryable`.
+
+### Implementation Files
+
+- `src/relayer/worker.ts`
+- `src/api/routes.ts`
+- `src/db/repositories.ts`
+
+### Test Files
+
+- `test/integration/worker.test.ts`
+- `test/integration/api.test.ts`
+
+### Required Tests
+
+1. Create a pending execution.
+
+2. Configure relayer submit to throw a transient error such as:
+
+```text
+Relayer HTTP 503
+```
+
+3. Run one worker tick with `submitRetryCount > 1`.
+
+4. Assert DB execution remains:
+
+```text
+state = pending
+terminal = 0
+```
+
+5. Public `GET /v1/relay-executions/:id` must either omit `error` or include a schema-valid object:
+
+```ts
+{
+  code: string;
+  message: string;
+  category: "user" | "provider" | "chain" | "relayer" | "unknown";
+  retryable: boolean;
+}
+```
+
+6. Public response must not expose internal retry bookkeeping as the public error object, for example:
+
+```json
+{ "code": "RELAYER_SUBMIT_ERROR", "message": "...", "submitAttempts": 1 }
+```
+
+7. After retry limit is reached, public error must be schema-valid and terminal:
+
+```text
+state = failed
+error.code = RELAYER_SUBMIT_FAILED
+error.category = relayer
+error.retryable = false
+```
+
+### Command
+
+```sh
+pnpm test test/integration/worker.test.ts test/integration/api.test.ts
+```
+
+## Section 5: Registry RPC URL Semantics Must Be Explicit
+
+### Risk
+
+The registry schema allows `rpcUrls` to be omitted. The implementation must either support known chain defaults or reject missing RPCs at startup. Silent runtime failure is not acceptable.
+
+### Implementation Files
+
+- `src/config/schema.ts`
+- `src/config/registry.ts`
+- `src/chain/readiness.ts`
+
+### Test Files
+
+- `test/unit/registry.test.ts`
+- `test/integration/readiness.test.ts`
+
+### Required Tests
+
+Choose one implementation strategy and test it.
+
+Strategy A: require `rpcUrls` for now.
+
+Tests:
+
+1. Registry without `rpcUrls` fails `loadRegistry` with a clear error.
+2. Registry with empty `rpcUrls` fails schema validation.
+3. Registry with one valid RPC URL loads.
+
+Strategy B: use known chain defaults.
+
+Tests:
+
+1. Registry without `rpcUrls` for a known viem chain creates clients using viem default RPCs.
+2. Registry without `rpcUrls` for an unknown chain fails `loadRegistry` with a clear error.
+3. Explicit `rpcUrls` override known defaults.
+
+Until Strategy B is implemented completely, prefer Strategy A because it is simpler and operationally explicit.
+
+### Command
+
+```sh
+pnpm test test/unit/registry.test.ts test/integration/readiness.test.ts
+```
+
+## Section 6: Required Confirmations Should Be Bound Once
+
+### Risk
+
+The app needs required confirmations to decide when a successful receipt becomes public `succeeded`, but fetching network metadata per create adds avoidable latency and another failure point.
+
+### Implementation Files
+
+- `src/config/relayerDiscovery.ts`
+- `src/config/registry.ts`
+- `src/api/routes.ts`
+- `src/chain/readiness.ts`
+- `src/relayer/mapper.ts`
+
+### Test Files
+
+- `test/unit/relayer-discovery-bind.test.ts`
+- `test/integration/api.test.ts`
+- `test/unit/lifecycle-mapper.test.ts`
+
+### Required Tests
+
+1. Relayer discovery stores both:
+
+```text
+relayerIdByChainId[chainId]
+requiredConfirmationsByChainId[chainId]
+```
+
+or an equivalent runtime chain binding object.
+
+2. `POST /v1/relay-executions` persists `required_confirmations` from the startup/readiness binding, not from a fresh per-request OZ network lookup.
+
+3. If the matched OZ network omits `required_confirmations`, readiness/startup must fail unless an explicit operational fallback exists.
+
+4. Lifecycle mapper keeps `submitted` for successful receipts until confirmations are satisfied.
+
+5. Lifecycle mapper returns `succeeded` once OZ reports `confirmed_at` or equivalent confirmed status.
+
+### Command
+
+```sh
+pnpm test test/unit/relayer-discovery-bind.test.ts test/integration/api.test.ts test/unit/lifecycle-mapper.test.ts
+```
+
+## Section 7: Public Response Contract Must Match The Simplified Spec
+
+### Risk
+
+The public API must remain dapp-simple. Regression tests should fail if old fields return.
+
+### Implementation Files
+
+- `src/api/routes.ts`
+- `src/api/schemas.ts`
+
+### Test Files
+
+- `test/integration/api.test.ts`
+- `test/e2e/relay-api.e2e.test.ts`
+
+### Required Tests
+
+1. `POST /v1/relay-executions` request schema rejects client-provided `forwarderAddress` if additional properties are disallowed, or ignores it if the framework permits unknown properties. The persisted and returned forwarder must always be registry-resolved.
+
+2. Relay execution response does not include:
+
+- `provider`
+- `ozRelayerId`
+- `ozTransactionId`
+- `transaction.hashes`
+- raw OZ status
+- raw payload
+- raw signature
+
+3. `GET /v1/capabilities` returns exactly:
+
+```ts
+{
+  providerName: string;
+  chains: Array<{ chainId: number; forwarderAddress: string }>;
+}
+```
+
+4. Capabilities response does not include:
+
+- macros
+- readiness
+- feature flags
+- public state names
+- relayer IDs
+- relayer statuses
+
+### Command
+
+```sh
+pnpm test test/integration/api.test.ts test/e2e/relay-api.e2e.test.ts
+```
+
+## Section 8: Force Execution Semantics
+
+### Risk
+
+Force execution intentionally allows onchain reverts, but it must not bypass policy, auth, signature validation, expiry, readiness, or malformed payload checks.
+
+### Implementation Files
+
+- `src/api/routes.ts`
+- `src/relayer/worker.ts`
+
+### Test Files
+
+- `test/integration/api.test.ts`
+- `test/integration/worker.test.ts`
+
+### Required Tests
+
+1. Preflight deterministic revert without force returns:
+
+```text
+422 PREFLIGHT_REVERTED
+```
+
+and creates no public execution.
+
+2. Preflight deterministic revert with force returns:
+
+```text
+202 pending
+```
+
+and marks internal/public metadata enough for debugging.
+
+3. Worker does not re-run preflight and reject solely due to the same forced preflight revert.
+
+4. Force does not bypass:
+
+- invalid signature
+- provider-name mismatch
+- `(domain, macroAddress)` not allowlisted
+- expired payload
+- not-yet-valid payload
+- chain readiness failure
+- malformed payload
+
+### Command
+
+```sh
+pnpm test test/integration/api.test.ts test/integration/worker.test.ts
+```
+
+## Section 9: Audit Log Coverage
+
+### Risk
+
+Failed authenticated create attempts must be traceable internally without creating public relay execution resources.
+
+### Implementation Files
+
+- `src/api/routes.ts`
+- `src/db/repositories.ts`
+- `src/db/migrations.ts`
+
+### Test Files
+
+- `test/integration/api.test.ts`
+- `test/integration/db.test.ts`
+
+### Required Tests
+
+For each case below, assert one audit row is written with the expected `outcome_code`, and no public execution row is created unless stated otherwise:
+
+1. `CHAIN_NOT_ALLOWED`
+2. `INVALID_CLEAR_MACRO_PAYLOAD`
+3. `PROVIDER_NOT_ALLOWED`
+4. `MACRO_NOT_ALLOWED`
+5. `CLEAR_MACRO_EXPIRED`
+6. `CLEAR_MACRO_NOT_YET_VALID`
+7. `CHAIN_UNAVAILABLE` during digest read
+8. `SIGNATURE_INVALID`
+9. `READINESS_UNAVAILABLE`
+10. `PREFLIGHT_REVERTED`
+11. `DUPLICATE_HIDDEN`
+12. `DUPLICATE_REPLAYED`, with existing execution ID recorded
+13. `CREATED`, with created execution ID recorded
+
+Also assert audit rows do not store raw `payload` or raw `signature`.
+
+### Command
+
+```sh
+pnpm test test/integration/api.test.ts test/integration/db.test.ts
+```
+
+## Section 10: Realistic E2E Smoke Path
+
+### Risk
+
+Stub-only tests can miss contract/RPC/OZ envelope mismatches.
+
+### Implementation Files
+
+- `src/main.ts`
+- `src/chain/readiness.ts`
+- `src/relayer/client.ts`
+- `src/relayer/worker.ts`
+
+### Test Files
+
+- `test/integration/preflight-anvil.test.ts`
+- `test/e2e/relay-stack.e2e.test.ts` (Docker stack; `pnpm run test:e2e:stack`)
+
+### Required Tests
+
+Fast default tests:
+
+1. Preflight against Anvil contracts classifies deterministic revert as `deterministic_revert`.
+2. Preflight against Anvil contracts classifies valid call as `ok`.
+3. Signature validation supports EOA and ERC-1271 paths where fixtures exist.
+
+Docker-gated full-stack tests (`pnpm run test:e2e:stack`; uses `RelayerLikePreflightForwarder` on chain **31337**, not full Superfluid protocol):
+
+1. Start Redis, Anvil, OZ Relayer, and provider app.
+2. Bind relayer by discovered OZ `chain_id`.
+3. `GET /v1/capabilities` returns the configured provider name and forwarder.
+4. `POST /v1/relay-executions` creates `202 pending`.
+5. Worker submits through OZ Relayer.
+6. Polling reaches `succeeded` or `reverted` depending on fixture.
+
+### Command
+
+Default (requires `anvil` on `PATH` for the preflight file):
+
+```sh
+pnpm test test/integration/preflight-anvil.test.ts test/integration/signature-validation.test.ts
+```
+
+Docker stack E2E (sets `RUN_STACK_E2E=1`; requires Docker, Compose, and fixture tooling—see `specs/operations.md`):
+
+```sh
+pnpm run test:e2e:stack
+```
+
+## Production Readiness Exit Criteria
+
+The implementation can be considered ready for production review only when all are true:
+
+- Sections 1 through 9 are implemented and covered by default `pnpm test`.
+- Section 10 fast tests pass by default.
+- Docker-gated stack tests either pass in CI/nightly or are explicitly documented as manual release checks.
+- `pnpm run typecheck` passes.
+- `pnpm test` passes.
+- `pnpm run build` passes.
+- No public response exposes `ozRelayerId`, `ozTransactionId`, raw OZ response JSON, raw payload, or raw signature.

@@ -42,10 +42,12 @@ export type RelayerDetails = {
 
 export type OzNetwork = {
   id: string;
+  /** EVM chain id from OpenZeppelin Relayer when present; preferred over parsing `id`. */
+  chain_id?: number;
   network?: string;
   name?: string;
   network_type: string;
-  required_confirmations: number;
+  required_confirmations?: number | null;
 };
 
 function extractRelayerListPayload(data: unknown): Array<{ id: string }> {

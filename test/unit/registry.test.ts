@@ -28,4 +28,43 @@ describe("loadRegistry", () => {
     expect(chain?.forwarderAddress).toBe("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     expect(chain?.allowedMacros[0]?.address).toBe("0xdddddddddddddddddddddddddddddddddddddddd");
   });
+
+  it("rejects registry without rpcUrls", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            allowedMacros: [],
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/rpcUrls/);
+  });
+
+  it("rejects registry with empty rpcUrls array", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: [],
+            allowedMacros: [],
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/rpcUrls/);
+  });
 });
