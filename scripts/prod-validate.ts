@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import dotenv from "dotenv";
+import { Keystore } from "ox";
+import { privateKeyToAccount } from "viem/accounts";
 
 dotenv.config();
 
@@ -17,6 +19,14 @@ type OzRelayerConfig = {
   networks?: unknown;
 };
 
+type ProviderConfig = {
+  chains: {
+    chainId: number;
+    rpcUrls: string[];
+    macroPolicy?: { mode?: string };
+  }[];
+};
+
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -31,12 +41,51 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
 }
 
+function readSignerAddressFromKeystore(keystorePath: string, passphrase: string): string {
+  const keystore = readJson(keystorePath) as Parameters<typeof Keystore.toKey>[0];
+  const key = Keystore.toKey(keystore, { password: passphrase });
+  const privateKey = Keystore.decrypt(keystore, key);
+  return privateKeyToAccount(privateKey).address;
+}
+
+async function readNativeBalance(rpcUrl: string, address: string): Promise<bigint> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_getBalance",
+      params: [address, "latest"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const payload = (await response.json()) as { result?: string; error?: { message?: string } };
+  if (payload.error) {
+    throw new Error(payload.error.message ?? "Unknown JSON-RPC error");
+  }
+  if (!payload.result || !/^0x[0-9a-fA-F]+$/.test(payload.result)) {
+    throw new Error("Invalid eth_getBalance response");
+  }
+  return BigInt(payload.result);
+}
+
+function formatEthFromWei(wei: bigint): string {
+  const base = 10n ** 18n;
+  const whole = wei / base;
+  const fractional = wei % base;
+  const fractional4 = fractional / 10n ** 14n;
+  return `${whole}.${fractional4.toString().padStart(4, "0")} ETH`;
+}
+
 function inside(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel !== "" && !rel.startsWith("..") && !rel.includes(`..${sep}`);
 }
 
-function run(): void {
+async function run(): Promise<void> {
   requireSecret("PROVIDER_NAME");
   requireSecret("OZ_RELAYER_API_KEY");
   requireSecret("OZ_WEBHOOK_SIGNING_KEY");
@@ -83,11 +132,31 @@ function run(): void {
     fail("Generated OZ networks count must match relayers count");
   }
 
+  const signerAddress = readSignerAddressFromKeystore(keystorePath, process.env.OZ_KEYSTORE_PASSPHRASE ?? "");
+  const providerConfig = readJson(providerConfigPath) as ProviderConfig;
+  console.log(`Signer address: ${signerAddress}`);
+  console.log("Configured chain balances:");
+  for (const chain of providerConfig.chains) {
+    const mode = chain.macroPolicy?.mode ?? "unknown";
+    const rpcUrl = chain.rpcUrls[0];
+    if (!rpcUrl) {
+      console.log(`- chainId=${chain.chainId} mode=${mode}: no rpcUrls configured`);
+      continue;
+    }
+    try {
+      const balanceWei = await readNativeBalance(rpcUrl, signerAddress);
+      console.log(`- chainId=${chain.chainId} mode=${mode} rpc=${rpcUrl} balance=${formatEthFromWei(balanceWei)}`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.log(`- chainId=${chain.chainId} mode=${mode} rpc=${rpcUrl} balance=unavailable (${reason})`);
+    }
+  }
+
   console.log("Production config validation passed.");
 }
 
 try {
-  run();
+  await run();
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

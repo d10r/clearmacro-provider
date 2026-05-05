@@ -26,7 +26,7 @@ function makeWorkspace(options?: { precreateKeystore?: boolean }): string {
       ],
     })}\n`,
   );
-  if (options?.precreateKeystore ?? true) {
+  if (options?.precreateKeystore ?? false) {
     writeFileSync(join(unique, "config/oz-relayer/keys/prod-relayer.json"), "{}\n");
   }
   return unique;

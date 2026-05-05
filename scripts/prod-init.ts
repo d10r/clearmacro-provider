@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,14 @@ async function generateRelayerKeystore(keystorePath: string, passphrase: string)
   console.log(`Generated relayer signer address: ${account.address}`);
 }
 
+function readRelayerSignerAddress(keystorePath: string, passphrase: string): string {
+  const keystore = JSON.parse(readFileSync(keystorePath, "utf8")) as Parameters<typeof Keystore.toKey>[0];
+  const key = Keystore.toKey(keystore, { password: passphrase });
+  const privateKey = Keystore.decrypt(keystore, key);
+  const account = privateKeyToAccount(privateKey);
+  return account.address;
+}
+
 async function run(): Promise<void> {
   const force = process.argv.includes("--force");
   if (force) {
@@ -106,6 +114,8 @@ async function run(): Promise<void> {
   } else {
     console.log(`Keeping existing relayer keystore: ${keystorePath}`);
   }
+  const signerAddress = readRelayerSignerAddress(keystorePath, passphrase);
+  console.log(`Relayer signer address: ${signerAddress}`);
 
   const ozConfigDir = resolve("config/oz-relayer");
   if (!inside(ozConfigDir, keystorePath)) {
