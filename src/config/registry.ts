@@ -28,6 +28,14 @@ export type LoadedRegistry = {
 export function loadRegistry(registryPath: string): LoadedRegistry {
   const file = readFileSync(registryPath, "utf8");
   const parsed = JSON.parse(file) as unknown;
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { chains?: unknown }).chains)) {
+    const chains = (parsed as { chains: unknown[] }).chains;
+    for (const [index, chain] of chains.entries()) {
+      if (chain && typeof chain === "object" && "allowedMacros" in chain) {
+        throw new Error(`Invalid registry JSON: chains[] must not define top-level allowedMacros (chain index ${index})`);
+      }
+    }
+  }
   if (!Value.Check(RegistrySchema, parsed)) {
     throw new Error(`Invalid registry JSON: ${formatRegistrySchemaErrors(parsed)}`);
   }
@@ -37,9 +45,6 @@ export function loadRegistry(registryPath: string): LoadedRegistry {
   for (const chain of registry.chains) {
     if (chainsById.has(chain.chainId)) {
       throw new Error(`Duplicate chain id in registry: ${chain.chainId}`);
-    }
-    if ("allowedMacros" in chain) {
-      throw new Error(`Invalid registry JSON: chains[] must not define top-level allowedMacros (chainId ${chain.chainId})`);
     }
     chain.forwarderAddress = normalizeAddress(chain.forwarderAddress);
     if (chain.macroPolicy.mode === "allowlist") {

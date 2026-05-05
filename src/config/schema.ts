@@ -24,14 +24,6 @@ export const RegistrySchema = Type.Object({
           mode: Type.Literal("open"),
         }, { additionalProperties: false }),
       ]),
-      allowedMacros: Type.Optional(
-        Type.Array(
-          Type.Object({
-            domain: Type.String({ minLength: 1 }),
-            address: Type.String({ pattern: addressPattern }),
-          }),
-        ),
-      ),
     }),
     { minItems: 1 },
   ),
