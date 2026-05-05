@@ -482,7 +482,7 @@ export function writeProviderRegistry(stackDir: string, forwarderAddress: string
         chainId: 31337,
         forwarderAddress,
         rpcUrls: ["http://anvil:8545"],
-        allowedMacros: [{ domain: "e2e", address: macro }],
+        macroPolicy: { mode: "allowlist", allowedMacros: [{ domain: "e2e", address: macro }] },
       },
     ],
   };

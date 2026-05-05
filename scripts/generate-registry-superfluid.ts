@@ -3,7 +3,7 @@
  * - One chain per Superfluid network (skips deprecated).
  * - forwarderAddress = Superfluid MacroForwarder (`contractsV1.macroForwarder`).
  * - rpcUrls = metadata `publicRPCs` (replace with private RPC URLs for production load).
- * - allowedMacros = [] until you add deployed ClearMacro contracts.
+ * - macroPolicy.mode = "open" (set allowlists explicitly for production).
  *
  * Usage:
  *   pnpm run registry:gen:superfluid
@@ -58,7 +58,7 @@ function run(): void {
       chainId: n.chainId,
       forwarderAddress: getAddress(mf),
       rpcUrls: [...rpcs],
-      allowedMacros: [],
+      macroPolicy: { mode: "open" },
     });
   }
 

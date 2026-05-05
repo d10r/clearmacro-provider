@@ -5,12 +5,15 @@
       "chainId": 8453,
       "forwarderAddress": "0x0000000000000000000000000000000000000000",
       "rpcUrls": ["https://example.invalid"],
-      "allowedMacros": [
-        {
-          "domain": "macros.superfluid.eth",
-          "address": "0x0000000000000000000000000000000000000000"
-        }
-      ]
+      "macroPolicy": {
+        "mode": "allowlist",
+        "allowedMacros": [
+          {
+            "domain": "macros.superfluid.eth",
+            "address": "0x0000000000000000000000000000000000000000"
+          }
+        ]
+      }
     }
   ]
 }

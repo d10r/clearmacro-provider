@@ -17,7 +17,10 @@ describe("loadRegistry", () => {
             chainId: 1,
             forwarderAddress: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
             rpcUrls: ["http://localhost"],
-            allowedMacros: [{ domain: "MacroDomain", address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" }],
+            macroPolicy: {
+              mode: "allowlist",
+              allowedMacros: [{ domain: "MacroDomain", address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" }],
+            },
           },
         ],
       }),
@@ -26,7 +29,10 @@ describe("loadRegistry", () => {
     const registry = loadRegistry(file);
     const chain = registry.chainsById.get(1);
     expect(chain?.forwarderAddress).toBe("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    expect(chain?.allowedMacros[0]?.address).toBe("0xdddddddddddddddddddddddddddddddddddddddd");
+    expect(chain?.macroPolicy.mode).toBe("allowlist");
+    if (chain?.macroPolicy.mode === "allowlist") {
+      expect(chain.macroPolicy.allowedMacros[0]?.address).toBe("0xdddddddddddddddddddddddddddddddddddddddd");
+    }
   });
 
   it("rejects registry without rpcUrls", () => {
@@ -40,7 +46,7 @@ describe("loadRegistry", () => {
           {
             chainId: 1,
             forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            allowedMacros: [],
+            macroPolicy: { mode: "open" },
           },
         ],
       }),
@@ -60,11 +66,97 @@ describe("loadRegistry", () => {
             chainId: 1,
             forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             rpcUrls: [],
-            allowedMacros: [],
+            macroPolicy: { mode: "open" },
           },
         ],
       }),
     );
     expect(() => loadRegistry(file)).toThrow(/rpcUrls/);
+  });
+
+  it("rejects top-level allowedMacros even when macroPolicy is absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            allowedMacros: [],
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+  });
+
+  it("rejects allowlist domain that becomes empty after trim normalization", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: {
+              mode: "allowlist",
+              allowedMacros: [{ domain: "   ", address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" }],
+            },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/domain must not be empty/);
+  });
+
+  it("rejects invalid macroPolicy mode", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: { mode: "invalid" },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+  });
+
+  it("rejects open mode when macroPolicy.allowedMacros is present", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: {
+              mode: "open",
+              allowedMacros: [{ domain: "test", address: "0xdddddddddddddddddddddddddddddddddddddddd" }],
+            },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
   });
 });

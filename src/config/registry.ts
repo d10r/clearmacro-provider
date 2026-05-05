@@ -12,6 +12,10 @@ function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
+function normalizeDomain(domain: string): string {
+  return domain.trim();
+}
+
 export type LoadedRegistry = {
   raw: Registry;
   chainsById: Map<number, RegistryChain>;
@@ -34,9 +38,24 @@ export function loadRegistry(registryPath: string): LoadedRegistry {
     if (chainsById.has(chain.chainId)) {
       throw new Error(`Duplicate chain id in registry: ${chain.chainId}`);
     }
+    if ("allowedMacros" in chain) {
+      throw new Error(`Invalid registry JSON: chains[] must not define top-level allowedMacros (chainId ${chain.chainId})`);
+    }
     chain.forwarderAddress = normalizeAddress(chain.forwarderAddress);
-    for (const macro of chain.allowedMacros) {
-      macro.address = normalizeAddress(macro.address);
+    if (chain.macroPolicy.mode === "allowlist") {
+      const seen = new Set<string>();
+      for (const macro of chain.macroPolicy.allowedMacros) {
+        macro.domain = normalizeDomain(macro.domain);
+        if (macro.domain.length === 0) {
+          throw new Error(`Invalid macro allowlist entry for chain ${chain.chainId}: domain must not be empty`);
+        }
+        macro.address = normalizeAddress(macro.address);
+        const key = `${macro.domain}::${macro.address}`;
+        if (seen.has(key)) {
+          throw new Error(`Duplicate macro allowlist entry for chain ${chain.chainId}: (${macro.domain}, ${macro.address})`);
+        }
+        seen.add(key);
+      }
     }
     chainsById.set(chain.chainId, chain);
   }

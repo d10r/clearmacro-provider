@@ -58,7 +58,10 @@ function setup() {
           chainId: 1,
           forwarderAddress: "0x0000000000000000000000000000000000000001",
           rpcUrls: ["http://localhost:8545"],
-          allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+          macroPolicy: {
+            mode: "allowlist",
+            allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+          },
         },
       ],
     }),

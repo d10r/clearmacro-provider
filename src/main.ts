@@ -61,6 +61,17 @@ async function main(): Promise<void> {
       }),
   });
 
+  for (const chain of registry.chainsById.values()) {
+    if (chain.macroPolicy.mode === "open") {
+      app.log.info({ chainId: chain.chainId, macroPolicy: "open" }, "registry chain loaded");
+      continue;
+    }
+    app.log.info(
+      { chainId: chain.chainId, macroPolicy: "allowlist", macroCount: chain.macroPolicy.allowedMacros.length },
+      "registry chain loaded",
+    );
+  }
+
   if (env.relayerWorkerEnabled) {
     let tickInFlight = false;
     setInterval(() => {

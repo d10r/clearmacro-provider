@@ -17,7 +17,10 @@ function loadFixtureRegistry() {
           chainId: 1,
           forwarderAddress: "0x0000000000000000000000000000000000000001",
           rpcUrls: ["http://localhost:8545"],
-          allowedMacros: [{ domain: "allowed.domain", address: "0x00000000000000000000000000000000000000aa" }],
+          macroPolicy: {
+            mode: "allowlist",
+            allowedMacros: [{ domain: "allowed.domain", address: "0x00000000000000000000000000000000000000aa" }],
+          },
         },
       ],
     }),
@@ -73,7 +76,7 @@ describe("assertMacroAllowed", () => {
     }
   });
 
-  it("rejects every macro when allowlist is empty", () => {
+  it("allows every macro in open mode", () => {
     const dir = mkdtempSync(join(tmpdir(), "val-reg-empty-"));
     const path = join(dir, "registry.json");
     writeFileSync(
@@ -85,7 +88,7 @@ describe("assertMacroAllowed", () => {
             chainId: 1,
             forwarderAddress: "0x0000000000000000000000000000000000000001",
             rpcUrls: ["http://localhost:8545"],
-            allowedMacros: [],
+            macroPolicy: { mode: "open" },
           },
         ],
       }),
@@ -96,9 +99,6 @@ describe("assertMacroAllowed", () => {
       domain: "any.domain",
       macroAddress: "0x00000000000000000000000000000000000000aa",
     });
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.code).toBe("MACRO_NOT_ALLOWED");
-    }
+    expect(r).toEqual({ ok: true });
   });
 });

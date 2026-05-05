@@ -25,7 +25,10 @@ function makeRegistry(rpcUrl: string) {
           chainId: 1,
           forwarderAddress: "0x0000000000000000000000000000000000000001",
           rpcUrls: [rpcUrl],
-          allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+          macroPolicy: {
+            mode: "allowlist",
+            allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+          },
         },
       ],
     }),
@@ -110,7 +113,10 @@ describe("chain readiness matrix", () => {
             chainId: 1,
             forwarderAddress: "0x0000000000000000000000000000000000000001",
             rpcUrls: ["http://rpc.test"],
-            allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+            macroPolicy: {
+              mode: "allowlist",
+              allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+            },
           },
         ],
       }),

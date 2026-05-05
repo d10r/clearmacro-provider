@@ -9,12 +9,28 @@ export const RegistrySchema = Type.Object({
       chainId: Type.Integer({ minimum: 1 }),
       forwarderAddress: Type.String({ pattern: addressPattern }),
       rpcUrls: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-      allowedMacros: Type.Array(
+      macroPolicy: Type.Union([
         Type.Object({
-          domain: Type.String({ minLength: 1 }),
-          address: Type.String({ pattern: addressPattern }),
-        }),
-        { minItems: 0 },
+          mode: Type.Literal("allowlist"),
+          allowedMacros: Type.Array(
+            Type.Object({
+              domain: Type.String({ minLength: 1 }),
+              address: Type.String({ pattern: addressPattern }),
+            }),
+            { minItems: 1 },
+          ),
+        }, { additionalProperties: false }),
+        Type.Object({
+          mode: Type.Literal("open"),
+        }, { additionalProperties: false }),
+      ]),
+      allowedMacros: Type.Optional(
+        Type.Array(
+          Type.Object({
+            domain: Type.String({ minLength: 1 }),
+            address: Type.String({ pattern: addressPattern }),
+          }),
+        ),
       ),
     }),
     { minItems: 1 },
@@ -23,4 +39,4 @@ export const RegistrySchema = Type.Object({
 
 export type Registry = Static<typeof RegistrySchema>;
 export type RegistryChain = Registry["chains"][number];
-export type RegistryAllowedMacro = RegistryChain["allowedMacros"][number];
+export type RegistryAllowedMacro = Extract<RegistryChain["macroPolicy"], { mode: "allowlist" }>["allowedMacros"][number];

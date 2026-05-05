@@ -17,7 +17,10 @@ function writeMinimalRegistry(dir: string, chainId = 1) {
           chainId,
           forwarderAddress: "0x0000000000000000000000000000000000000001",
           rpcUrls: ["http://localhost:8545"],
-          allowedMacros: [{ domain: "t", address: "0x0000000000000000000000000000000000000002" }],
+          macroPolicy: {
+            mode: "allowlist",
+            allowedMacros: [{ domain: "t", address: "0x0000000000000000000000000000000000000002" }],
+          },
         },
       ],
     }),
