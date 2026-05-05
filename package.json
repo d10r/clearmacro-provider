@@ -24,6 +24,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "oz:bootstrap:anvil": "tsx scripts/bootstrap-oz-anvil-keystore.ts",
     "oz:gen:networks": "tsx scripts/generate-oz-relayer-networks.ts",
+    "prod:init": "tsx scripts/prod-init.ts",
+    "prod:validate": "tsx scripts/prod-validate.ts",
     "registry:gen:superfluid": "tsx scripts/generate-registry-superfluid.ts",
     "stack:dev": "docker compose up -d redis anvil oz-relayer",
     "stack:dev:down": "docker compose down",
@@ -47,6 +49,7 @@
     "fastify": "^5.8.5",
     "prom-client": "^15.1.3",
     "uuid": "^13.0.0",
+    "ox": "^0.14.20",
     "viem": "^2.48.4"
   },
   "devDependencies": {

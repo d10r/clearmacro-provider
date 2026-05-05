@@ -63,6 +63,9 @@ importers:
       eslint:
         specifier: ^10.2.1
         version: 10.2.1
+      ox:
+        specifier: ^0.14.20
+        version: 0.14.20(typescript@6.0.3)
       prettier:
         specifier: ^3.8.3
         version: 3.8.3

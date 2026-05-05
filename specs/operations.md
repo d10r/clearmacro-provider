@@ -52,7 +52,8 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
 1. Create production `.env` from `.env.example` (`0600`). Set at least:
    - `OZ_RELAYER_API_KEY`
    - `PROVIDER_NAME` (must match dapp `payload.security.provider`)
-   - Relayer secrets (`OZ_WEBHOOK_SIGNING_KEY`, `OZ_KEYSTORE_PASSPHRASE`, etc.)
+   - Relayer secrets (`OZ_KEYSTORE_PASSPHRASE`, etc.)
+   - (Optional) set `OZ_WEBHOOK_SIGNING_KEY` if you consume OZ outbound webhooks outside this app
    - (Recommended) set `OZ_STORAGE_ENCRYPTION_KEY` to your own base64 32-byte key; if omitted, compose uses an insecure default convenience key
    - `DATABASE_PATH` (default under `/data` in Compose)
    - If auth: `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`

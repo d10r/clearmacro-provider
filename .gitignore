@@ -7,6 +7,7 @@ superfluid-dashboard/
 .env.*
 !/.env.example
 config/registry.json
+config/oz-relayer/config.json
 config/oz-relayer/keys/*.json
 data/
 dist/
