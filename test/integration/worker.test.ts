@@ -48,7 +48,7 @@ function setup() {
   const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
 
-  const registryPath = join(dir, "registry.json");
+  const registryPath = join(dir, "provider.json");
   writeFileSync(
     registryPath,
     JSON.stringify({

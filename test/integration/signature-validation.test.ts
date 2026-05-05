@@ -7,7 +7,7 @@ import { validateRelaySignature } from "../../src/chain/readiness.js";
 
 function makeRegistry(rpcUrl: string) {
   const dir = mkdtempSync(join(tmpdir(), "sig-test-"));
-  const registryPath = join(dir, "registry.json");
+  const registryPath = join(dir, "provider.json");
   writeFileSync(
     registryPath,
     JSON.stringify({

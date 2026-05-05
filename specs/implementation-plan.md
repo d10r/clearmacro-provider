@@ -100,7 +100,7 @@ Required:
 
 Optional:
 
-- `REGISTRY_PATH`: path to registry JSON file. Default: `config/registry.json`.
+- `PROVIDER_CONFIG_PATH`: path to provider config JSON file. Default: `config/provider.json`.
 - `HOST`: bind address. Default: `0.0.0.0`.
 - `PORT`: HTTP port. Default: `3000`.
 - `LOG_LEVEL`: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`.

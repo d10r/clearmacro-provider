@@ -338,7 +338,7 @@ Requirements:
 
 - Built from this repo's `Dockerfile`.
 - Host-published port controlled by `${E2E_APP_PORT}`.
-- `REGISTRY_PATH` points to generated registry mounted read-only.
+- `PROVIDER_CONFIG_PATH` points to generated provider config mounted read-only.
 - `OZ_RELAYER_URL=http://oz-relayer:8080`.
 - `PROVIDER_NAME=macros.superfluid.eth`.
 - `RELAYER_WORKER_ENABLED=true`.

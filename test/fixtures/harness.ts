@@ -38,7 +38,7 @@ function sha256Hex(value: string): string {
 }
 
 export function writeRegistryFixture(baseDir: string, mode: "allowlist" | "open" = "allowlist") {
-  const registryPath = join(baseDir, "registry.json");
+  const registryPath = join(baseDir, "provider.json");
   const macroPolicy =
     mode === "open"
       ? ({ mode: "open" } as const)

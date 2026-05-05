@@ -57,7 +57,7 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
    - (Recommended) set `OZ_STORAGE_ENCRYPTION_KEY` to your own base64 32-byte key; if omitted, compose uses an insecure default convenience key
    - `DATABASE_PATH` (default under `/data` in Compose)
    - If auth: `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`
-2. Provide **`config/registry.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`).
+2. Provide **`config/provider.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`).
 3. Provide OpenZeppelin Relayer config and keystores under **`config/oz-relayer/`** (keys not in git).
 4. Ensure **exactly one** active relayer per configured chain is discoverable via the relayer API at app startup.
 5. `docker compose -f compose.prod.yaml up -d --build`
@@ -76,8 +76,8 @@ Back up **both**. Loss of Redis loses relayer-side transaction metadata; loss of
 
 - AGPL-3.0 acceptable for OpenZeppelin Relayer in your environment.
 - Dedicated service user with Docker access where applicable.
-- Production `.env` and `config/registry.json` permissions locked down.
+- Production `.env` and `config/provider.json` permissions locked down.
 - `PROVIDER_NAME` aligned with dapps and `GET /v1/capabilities`.
-- Relayer signer funded on every chain in `registry.json`.
+- Relayer signer funded on every chain in `provider.json`.
 - External Prometheus scraping **`/metrics`** (and relayer metrics if used).
 - Liveness **`/healthz`**, readiness **`/readyz`** wired into orchestration.

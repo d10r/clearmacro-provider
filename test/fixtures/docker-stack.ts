@@ -486,7 +486,7 @@ export function writeProviderRegistry(stackDir: string, forwarderAddress: string
       },
     ],
   };
-  const registryPath = join(stackDir, "registry.json");
+  const registryPath = join(stackDir, "provider.json");
   writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
   chmodSync(registryPath, 0o644);
 }

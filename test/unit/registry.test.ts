@@ -7,7 +7,7 @@ import { loadRegistry } from "../../src/config/registry.js";
 describe("loadRegistry", () => {
   it("loads and normalizes registry addresses", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -37,7 +37,7 @@ describe("loadRegistry", () => {
 
   it("rejects registry without rpcUrls", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -56,7 +56,7 @@ describe("loadRegistry", () => {
 
   it("rejects registry with empty rpcUrls array", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -76,7 +76,7 @@ describe("loadRegistry", () => {
 
   it("rejects top-level allowedMacros even when macroPolicy is absent", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -96,7 +96,7 @@ describe("loadRegistry", () => {
 
   it("rejects allowlist domain that becomes empty after trim normalization", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -119,7 +119,7 @@ describe("loadRegistry", () => {
 
   it("rejects invalid macroPolicy mode", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -139,7 +139,7 @@ describe("loadRegistry", () => {
 
   it("rejects open mode when macroPolicy.allowedMacros is present", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -162,7 +162,7 @@ describe("loadRegistry", () => {
 
   it("rejects allowlist mode with missing allowedMacros", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -182,7 +182,7 @@ describe("loadRegistry", () => {
 
   it("rejects allowlist mode with empty allowedMacros", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({
@@ -202,7 +202,7 @@ describe("loadRegistry", () => {
 
   it("rejects duplicate allowlist (domain, address) entries", () => {
     const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
-    const file = join(dir, "registry.json");
+    const file = join(dir, "provider.json");
     writeFileSync(
       file,
       JSON.stringify({

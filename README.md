@@ -1,6 +1,6 @@
 # ClearMacro Provider
 
-TypeScript service that accepts signed **ClearMacro relay executions**, validates policy against a static **registry**, tracks lifecycle in **SQLite**, and submits transactions via **OpenZeppelin Relayer**. The registry holds chain policy (forwarders, allowed macros, RPCs); relayer IDs are resolved at startup from the relayer API.
+TypeScript service that accepts signed **ClearMacro relay executions**, validates policy against static **provider config**, tracks lifecycle in **SQLite**, and submits transactions via **OpenZeppelin Relayer**. Provider config holds chain policy (forwarders, allowed macros, RPCs); relayer IDs are resolved at startup from the relayer API.
 
 **Canonical API spec:** [`specs/simplified-dapp-facing-relay-api.md`](specs/simplified-dapp-facing-relay-api.md)  
 **Spec index:** [`specs/README.md`](specs/README.md)
@@ -54,12 +54,12 @@ Optional `forceExecuteAfterPreflightRevert: true` creates a **`pending`** execut
 | `DATABASE_PATH` | yes | SQLite file path |
 | `OZ_RELAYER_URL` | yes | OpenZeppelin Relayer base URL |
 | `OZ_RELAYER_API_KEY` | yes | Relayer API bearer |
-| `REGISTRY_PATH` | no | Default `config/registry.json` |
+| `PROVIDER_CONFIG_PATH` | no | Default `config/provider.json` |
 | `PROVIDER_NAME` | yes | Must match `payload.security.provider` from dapps (also returned by `GET /v1/capabilities`) |
 | `API_AUTH_ENABLED` | no | Default `false` |
 | `API_CLIENTS_JSON` | if auth on | JSON array `[{ "id", "apiTokenHash" }]` where `apiTokenHash` is SHA-256 hex of the bearer token |
 
-### Registry JSON (`config/registry.json`)
+### Provider Config JSON (`config/provider.json`)
 
 Minimal v1 shape:
 
@@ -70,10 +70,10 @@ Only chains present in `chains[]` are supported; leave chains you do not relay o
 
 **Superfluid-wide templates** (from `@superfluid-finance/metadata`: MacroForwarder per chain, `publicRPCs` as `rpcUrls`, empty `allowedMacros`):
 
-- `config/registry.superfluid-mainnets.json` — mainnets only (typical production starting point).
-- `config/registry.superfluid-all.json` — mainnets + testnets.
+- `config/provider.superfluid-mainnets.json` — mainnets only (typical production starting point).
+- `config/provider.superfluid-all.json` — mainnets + testnets.
 
-Regenerate after a metadata upgrade: `pnpm run registry:gen:superfluid` and `pnpm run registry:gen:superfluid -- --out config/registry.superfluid-mainnets.json --mainnet-only`. For production traffic, replace `rpcUrls` with your own RPC provider URLs.
+Regenerate after a metadata upgrade: `pnpm run provider:gen:superfluid` and `pnpm run provider:gen:superfluid -- --out config/provider.superfluid-mainnets.json --mainnet-only`. For production traffic, replace `rpcUrls` with your own RPC provider URLs.
 
 ## Local development
 
@@ -83,7 +83,7 @@ pnpm run oz:bootstrap:anvil
 pnpm run stack:dev
 ```
 
-Run the API (needs `.env` with at least `DATABASE_PATH`, `OZ_*`, `PROVIDER_NAME`, and a valid `config/registry.json`):
+Run the API (needs `.env` with at least `DATABASE_PATH`, `OZ_*`, `PROVIDER_NAME`, and a valid `config/provider.json`):
 
 ```bash
 pnpm run dev
@@ -102,7 +102,7 @@ pnpm run build
 ## Production deployment
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, and if using auth, `API_CLIENTS_JSON`.
-2. **`config/registry.json`** — copy or derive from `config/registry.superfluid-mainnets.json` (or `registry.superfluid-all.json`), then set `rpcUrls` and `allowedMacros` for your deployment.
+2. **`config/provider.json`** — copy or derive from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `allowedMacros` for your deployment.
 3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
 5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`

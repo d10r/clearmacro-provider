@@ -1,19 +1,19 @@
 /**
- * Builds `config/oz-relayer/networks/evm.json` from `config/registry.json` plus
+ * Builds `config/oz-relayer/networks/evm.json` from `config/provider.json` plus
  * `@superfluid-finance/metadata` (chain names, testnet flag, native symbol, public RPCs).
  *
- * RPC order: registry `rpcUrls` first (for private endpoints), then Superfluid `publicRPCs`.
- * At least one URL is required per chain (set `rpcUrls` in the registry if metadata has none).
+ * RPC order: provider-config `rpcUrls` first (for private endpoints), then Superfluid `publicRPCs`.
+ * At least one URL is required per chain (set `rpcUrls` in provider config if metadata has none).
  *
  * Local Anvil (chainId 31337) is supported without Superfluid metadata when `rpcUrls` are set.
  *
  * Usage:
  *   pnpm run oz:gen:networks
- *   pnpm run oz:gen:networks -- path/to/registry.json
+ *   pnpm run oz:gen:networks -- path/to/provider.json
  *   pnpm run oz:gen:networks -- --dry-run
  *   pnpm run oz:gen:networks -- --update-config
  *
- * Env: REGISTRY_PATH, OZ_EVM_NETWORKS_OUT, OZ_RELAYER_CONFIG_PATH, OZ_RELAYER_SIGNER_ID
+ * Env: PROVIDER_CONFIG_PATH, OZ_EVM_NETWORKS_OUT, OZ_RELAYER_CONFIG_PATH, OZ_RELAYER_SIGNER_ID
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -71,10 +71,10 @@ function defaultRequiredConfirmations(chainId: number): number {
   return chainId === 1 ? 12 : 1;
 }
 
-function mergeRpcUrls(registryUrls: readonly string[], publicRpcs: readonly string[] | undefined): string[] {
+function mergeRpcUrls(providerUrls: readonly string[], publicRpcs: readonly string[] | undefined): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const u of registryUrls) {
+  for (const u of providerUrls) {
     if (!seen.has(u)) {
       seen.add(u);
       out.push(u);
@@ -89,11 +89,11 @@ function mergeRpcUrls(registryUrls: readonly string[], publicRpcs: readonly stri
   return out;
 }
 
-function loadRegistry(registryPath: string): Registry {
-  const raw = JSON.parse(readFileSync(registryPath, "utf8")) as unknown;
+function loadProviderConfig(providerConfigPath: string): Registry {
+  const raw = JSON.parse(readFileSync(providerConfigPath, "utf8")) as unknown;
   if (!Value.Check(RegistrySchema, raw)) {
     const errs = [...Value.Errors(RegistrySchema, raw)];
-    throw new Error(`Invalid registry at ${registryPath}: ${errs.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
+    throw new Error(`Invalid provider config at ${providerConfigPath}: ${errs.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
   }
   return raw as Registry;
 }
@@ -102,7 +102,7 @@ function buildAnvilNetwork(chain: Registry["chains"][number]): OzEvmNetwork {
   const rpc_urls = mergeRpcUrls(chain.rpcUrls, undefined);
   if (rpc_urls.length === 0) {
     throw new Error(
-      `Registry chainId 31337 (Anvil): set "rpcUrls" on the chain (e.g. ["http://anvil:8545"] for Docker compose).`,
+      `Provider config chainId 31337 (Anvil): set "rpcUrls" on the chain (e.g. ["http://anvil:8545"] for Docker compose).`,
     );
   }
   return {
@@ -131,7 +131,7 @@ function buildSfBackedNetwork(chain: Registry["chains"][number]): OzEvmNetwork {
   const rpc_urls = mergeRpcUrls(chain.rpcUrls, sf.publicRPCs);
   if (rpc_urls.length === 0) {
     throw new Error(
-      `chainId ${chain.chainId} (${sf.name}): no RPC URLs. Add "rpcUrls" to this chain in the registry, or ensure metadata lists publicRPCs.`,
+      `chainId ${chain.chainId} (${sf.name}): no RPC URLs. Add "rpcUrls" to this chain in provider config, or ensure metadata lists publicRPCs.`,
     );
   }
   return {
@@ -197,12 +197,12 @@ function run(): void {
   const argv = process.argv.slice(2);
   const { positional, dryRun, updateConfig } = parseFlags(argv);
 
-  const registryPath = resolve(positional[0] ?? process.env.REGISTRY_PATH ?? "config/registry.json");
+  const providerConfigPath = resolve(positional[0] ?? process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json");
   const outPath = resolve(process.env.OZ_EVM_NETWORKS_OUT ?? "config/oz-relayer/networks/evm.json");
   const configPath = resolve(process.env.OZ_RELAYER_CONFIG_PATH ?? "config/oz-relayer/config.json");
 
-  const registry = loadRegistry(registryPath);
-  const networks = registry.chains.map((c) => buildOzNetwork(c));
+  const providerConfig = loadProviderConfig(providerConfigPath);
+  const networks = providerConfig.chains.map((c) => buildOzNetwork(c));
   const payload = { networks };
 
   if (dryRun) {
@@ -211,7 +211,7 @@ function run(): void {
   }
 
   writeFileSync(outPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  console.log(`Wrote ${outPath} (${networks.length} network(s)) from ${registryPath}`);
+  console.log(`Wrote ${outPath} (${networks.length} network(s)) from ${providerConfigPath}`);
 
   if (updateConfig) {
     const rawConfig = JSON.parse(readFileSync(configPath, "utf8")) as OzRelayerConfig;

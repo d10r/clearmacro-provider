@@ -7,7 +7,7 @@ import { bindRelayersToRegistry } from "../../src/config/relayerDiscovery.js";
 import type { OzRelayerClient } from "../../src/relayer/client.js";
 
 function writeMinimalRegistry(dir: string, chainId = 1) {
-  const path = join(dir, "registry.json");
+  const path = join(dir, "provider.json");
   writeFileSync(
     path,
     JSON.stringify({

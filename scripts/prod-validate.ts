@@ -43,13 +43,14 @@ function run(): void {
   requireSecret("OZ_KEYSTORE_PASSPHRASE");
   requireSecret("OZ_STORAGE_ENCRYPTION_KEY");
 
-  const registryPath = resolve(process.env.REGISTRY_PATH ?? "config/registry.json");
+  const providerConfigPathValue = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
+  const providerConfigPath = resolve(providerConfigPathValue);
   const relayerConfigPath = resolve(process.env.OZ_RELAYER_CONFIG_PATH ?? "config/oz-relayer/config.json");
   const networksOutPath = resolve(process.env.OZ_EVM_NETWORKS_OUT ?? "config/oz-relayer/networks/evm.json");
   const keystorePath = resolve(process.env.OZ_RELAYER_KEYSTORE_PATH ?? "config/oz-relayer/keys/prod-relayer.json");
   const ozConfigDir = resolve("config/oz-relayer");
 
-  for (const path of [registryPath, relayerConfigPath, networksOutPath, keystorePath]) {
+  for (const path of [providerConfigPath, relayerConfigPath, networksOutPath, keystorePath]) {
     if (!existsSync(path)) fail(`Missing required file: ${path}`);
   }
   if (!inside(ozConfigDir, keystorePath)) {

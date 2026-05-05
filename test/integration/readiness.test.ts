@@ -15,7 +15,7 @@ afterEach(() => {
 
 function makeRegistry(rpcUrl: string) {
   const dir = mkdtempSync(join(tmpdir(), "ready-test-"));
-  const registryPath = join(dir, "registry.json");
+  const registryPath = join(dir, "provider.json");
   writeFileSync(
     registryPath,
     JSON.stringify({
@@ -103,7 +103,7 @@ describe("chain readiness matrix", () => {
 
   it("returns RELAYER_UNAVAILABLE when chain is not bound to a relayer id", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ready-unbound-"));
-    const registryPath = join(dir, "registry.json");
+    const registryPath = join(dir, "provider.json");
     writeFileSync(
       registryPath,
       JSON.stringify({

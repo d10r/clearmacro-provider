@@ -7,7 +7,7 @@ import { assertMacroAllowed } from "../../src/validation/registry.js";
 
 function loadFixtureRegistry() {
   const dir = mkdtempSync(join(tmpdir(), "val-reg-"));
-  const path = join(dir, "registry.json");
+  const path = join(dir, "provider.json");
   writeFileSync(
     path,
     JSON.stringify({
@@ -78,7 +78,7 @@ describe("assertMacroAllowed", () => {
 
   it("allows every macro in open mode", () => {
     const dir = mkdtempSync(join(tmpdir(), "val-reg-empty-"));
-    const path = join(dir, "registry.json");
+    const path = join(dir, "provider.json");
     writeFileSync(
       path,
       JSON.stringify({

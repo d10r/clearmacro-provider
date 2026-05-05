@@ -9,7 +9,7 @@ services:
       HOST: 0.0.0.0
       PORT: ${PORT:-3000}
       DATABASE_PATH: ${DATABASE_PATH:-/data/clearmacro-provider.sqlite}
-      REGISTRY_PATH: ${REGISTRY_PATH:-/app/config/registry.json}
+      PROVIDER_CONFIG_PATH: ${PROVIDER_CONFIG_PATH:-/app/config/provider.json}
       OZ_RELAYER_URL: ${OZ_RELAYER_URL:-http://oz-relayer:8080}
       OZ_RELAYER_API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
       PROVIDER_NAME: ${PROVIDER_NAME:?set PROVIDER_NAME}
@@ -25,7 +25,7 @@ services:
       oz-relayer:
         condition: service_started
     volumes:
-      - ./config/registry.json:/app/config/registry.json:ro
+      - ./config/provider.json:/app/config/provider.json:ro
       - app-data:/data
 
   redis:

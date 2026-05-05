@@ -75,11 +75,12 @@ export function loadEnv() {
   if (apiAuthEnabled && apiClients.length === 0) {
     throw new Error("API_AUTH_ENABLED requires non-empty API_CLIENTS_JSON");
   }
+  const providerConfigPath = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
   return {
     databasePath: requireString("DATABASE_PATH"),
     ozRelayerUrl: requireString("OZ_RELAYER_URL"),
     ozRelayerApiKey: requireString("OZ_RELAYER_API_KEY"),
-    registryPath: process.env.REGISTRY_PATH ?? "config/registry.json",
+    registryPath: providerConfigPath,
     providerName: requireString("PROVIDER_NAME"),
     host: process.env.HOST ?? "0.0.0.0",
     port: parseInteger("PORT", 3000, 1),

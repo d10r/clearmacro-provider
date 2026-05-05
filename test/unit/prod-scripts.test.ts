@@ -13,7 +13,7 @@ function makeWorkspace(options?: { precreateKeystore?: boolean }): string {
   mkdirSync(join(unique, "config/oz-relayer/keys"), { recursive: true });
   mkdirSync(join(unique, "config/oz-relayer/networks"), { recursive: true });
   writeFileSync(
-    join(unique, "config/registry.json"),
+    join(unique, "config/provider.json"),
     `${JSON.stringify({
       version: 1,
       chains: [

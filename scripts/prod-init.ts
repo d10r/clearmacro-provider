@@ -86,15 +86,15 @@ async function run(): Promise<void> {
   ensureEnvSecret("OZ_WEBHOOK_SIGNING_KEY", generateWebhookSigningKey());
   ensureEnvSecret("OZ_STORAGE_ENCRYPTION_KEY", generateStorageEncryptionKey());
   const passphrase = requireEnv("OZ_KEYSTORE_PASSPHRASE");
-
-  const registryPath = resolve(process.env.REGISTRY_PATH ?? "config/registry.json");
+  const providerConfigPathValue = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
+  const providerConfigPath = resolve(providerConfigPathValue);
   const relayerConfigPath = resolve(process.env.OZ_RELAYER_CONFIG_PATH ?? "config/oz-relayer/config.json");
   const networksOutPath = resolve(process.env.OZ_EVM_NETWORKS_OUT ?? "config/oz-relayer/networks/evm.json");
   const keystorePath = resolve(process.env.OZ_RELAYER_KEYSTORE_PATH ?? "config/oz-relayer/keys/prod-relayer.json");
   const signerId = process.env.OZ_RELAYER_SIGNER_ID ?? "prod-signer";
 
-  if (!existsSync(registryPath)) {
-    throw new Error(`Registry not found: ${registryPath}`);
+  if (!existsSync(providerConfigPath)) {
+    throw new Error(`Provider config not found: ${providerConfigPath}`);
   }
 
   mkdirSync(dirname(relayerConfigPath), { recursive: true });
@@ -133,7 +133,7 @@ async function run(): Promise<void> {
 
   const generator = spawnSync(
     tsxBin,
-    [resolve(repoRoot, "scripts/generate-oz-relayer-networks.ts"), registryPath, "--update-config"],
+    [resolve(repoRoot, "scripts/generate-oz-relayer-networks.ts"), providerConfigPath, "--update-config"],
     {
       stdio: "inherit",
       env: {
@@ -150,7 +150,7 @@ async function run(): Promise<void> {
 
   console.log(`Prepared production relayer config: ${relayerConfigPath}`);
   console.log(`Relayer keystore: ${keystorePath}`);
-  console.log("Fund the relayer signer with native gas on every enabled registry chain before starting prod.");
+  console.log("Fund the relayer signer with native gas on every enabled provider-config chain before starting prod.");
 }
 
 try {

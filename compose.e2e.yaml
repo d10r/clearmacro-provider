@@ -71,7 +71,7 @@ services:
       HOST: 0.0.0.0
       PORT: "3000"
       DATABASE_PATH: /stack-data/clearmacro-e2e.sqlite
-      REGISTRY_PATH: /stack/registry.json
+      PROVIDER_CONFIG_PATH: /stack/provider.json
       OZ_RELAYER_URL: http://oz-relayer:8080
       OZ_RELAYER_API_KEY: ${E2E_OZ_RELAYER_API_KEY:?E2E_OZ_RELAYER_API_KEY required}
       PROVIDER_NAME: macros.superfluid.eth
