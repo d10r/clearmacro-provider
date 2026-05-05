@@ -28,6 +28,7 @@ export type HarnessOverrides = {
   getForwarderDigest?: AppDeps["getForwarderDigest"];
   validateRelaySignature?: AppDeps["validateRelaySignature"];
   preflightRunMacro?: AppDeps["preflightRunMacro"];
+  macroPolicyMode?: "allowlist" | "open";
 };
 
 const defaultPreflightOk: NonNullable<AppDeps["preflightRunMacro"]> = async () => "ok";
@@ -36,8 +37,15 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export function writeRegistryFixture(baseDir: string) {
+export function writeRegistryFixture(baseDir: string, mode: "allowlist" | "open" = "allowlist") {
   const registryPath = join(baseDir, "registry.json");
+  const macroPolicy =
+    mode === "open"
+      ? ({ mode: "open" } as const)
+      : ({
+          mode: "allowlist",
+          allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+        } as const);
   writeFileSync(
     registryPath,
     JSON.stringify({
@@ -47,10 +55,7 @@ export function writeRegistryFixture(baseDir: string) {
           chainId: 1,
           forwarderAddress: "0x0000000000000000000000000000000000000001",
           rpcUrls: ["http://localhost:8545"],
-          macroPolicy: {
-            mode: "allowlist",
-            allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
-          },
+          macroPolicy,
         },
       ],
     }),
@@ -85,7 +90,7 @@ function createStubRelayerClient(): OzRelayerClient {
 
 export async function createTestHarness(overrides?: HarnessOverrides) {
   const dir = mkdtempSync(join(tmpdir(), "cm-harness-"));
-  const registryPath = writeRegistryFixture(dir);
+  const registryPath = writeRegistryFixture(dir, overrides?.macroPolicyMode ?? "allowlist");
   const registry = loadRegistry(registryPath);
   registry.relayerIdByChainId.set(1, "relayer-main");
   registry.requiredConfirmationsByChainId.set(1, 1);

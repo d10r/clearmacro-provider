@@ -91,7 +91,7 @@ describe("loadRegistry", () => {
         ],
       }),
     );
-    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+    expect(() => loadRegistry(file)).toThrow(/top-level allowedMacros/);
   });
 
   it("rejects allowlist domain that becomes empty after trim normalization", () => {
@@ -158,5 +158,71 @@ describe("loadRegistry", () => {
       }),
     );
     expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+  });
+
+  it("rejects allowlist mode with missing allowedMacros", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: { mode: "allowlist" },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+  });
+
+  it("rejects allowlist mode with empty allowedMacros", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: { mode: "allowlist", allowedMacros: [] },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/macroPolicy/);
+  });
+
+  it("rejects duplicate allowlist (domain, address) entries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registry-test-"));
+    const file = join(dir, "registry.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        chains: [
+          {
+            chainId: 1,
+            forwarderAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            rpcUrls: ["http://localhost"],
+            macroPolicy: {
+              mode: "allowlist",
+              allowedMacros: [
+                { domain: "dup", address: "0xdddddddddddddddddddddddddddddddddddddddd" },
+                { domain: "dup", address: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    expect(() => loadRegistry(file)).toThrow(/Duplicate macro allowlist entry/);
   });
 });

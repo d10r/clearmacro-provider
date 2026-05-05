@@ -129,6 +129,70 @@ describe("API integration", () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it("open mode accepts macro not present in allowlist", async () => {
+    const { app } = await createTestHarness({ macroPolicyMode: "open" });
+    const macroAddress = "0x0000000000000000000000000000000000000003" as const;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload({
+        macroAddress,
+        payload: buildClearMacroParams({ domain: "any.domain", macroContract: macroAddress }) as `0x${string}`,
+      }),
+    });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it("open mode still rejects macro mismatch between request and payload", async () => {
+    const { app } = await createTestHarness({ macroPolicyMode: "open" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload({
+        macroAddress: "0x0000000000000000000000000000000000000003",
+        payload: buildClearMacroParams({
+          domain: "any.domain",
+          macroContract: "0x0000000000000000000000000000000000000002",
+        }) as `0x${string}`,
+      }),
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("INVALID_CLEAR_MACRO_PAYLOAD");
+  });
+
+  it("open mode still rejects provider mismatch and invalid signature", async () => {
+    const providerMismatch = await createTestHarness({ macroPolicyMode: "open" });
+    const providerResponse = await providerMismatch.app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload({
+        macroAddress: "0x0000000000000000000000000000000000000003",
+        payload: buildClearMacroParams({
+          domain: "any.domain",
+          provider: "wrong.provider.eth",
+          macroContract: "0x0000000000000000000000000000000000000003",
+        }) as `0x${string}`,
+      }),
+    });
+    expect(providerResponse.statusCode).toBe(403);
+    expect(providerResponse.json<{ error: { code: string } }>().error.code).toBe("PROVIDER_NOT_ALLOWED");
+
+    const signatureInvalid = await createTestHarness({ macroPolicyMode: "open", validateRelaySignature: async () => false });
+    const signatureResponse = await signatureInvalid.app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload({
+        macroAddress: "0x0000000000000000000000000000000000000003",
+        payload: buildClearMacroParams({
+          domain: "any.domain",
+          macroContract: "0x0000000000000000000000000000000000000003",
+        }) as `0x${string}`,
+      }),
+    });
+    expect(signatureResponse.statusCode).toBe(422);
+    expect(signatureResponse.json<{ error: { code: string } }>().error.code).toBe("SIGNATURE_INVALID");
+  });
+
   it("maps schema and malformed body failures to 400 validation error", async () => {
     const { app } = await createTestHarness();
     const malformed = await app.inject({
