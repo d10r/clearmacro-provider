@@ -64,7 +64,8 @@ Optional `forceExecuteAfterPreflightRevert: true` creates a **`pending`** execut
 Minimal v1 shape:
 
 - `version`: `1`
-- `chains[]`: `chainId`, `forwarderAddress`, **`rpcUrls`** (non-empty array of at least one URL), `allowedMacros[]` with `{ domain, address }` (may be empty until macros are deployed). RPCs are used for digest reads, signature checks, preflight, and readiness.
+- `chains[]`: `chainId`, `forwarderAddress`, **`rpcUrls`** (non-empty array of at least one URL), and `macroPolicy`.
+- `macroPolicy.mode = "allowlist"` requires `allowedMacros[]` with `{ domain, address }`; `macroPolicy.mode = "open"` accepts any macro on that chain. RPCs are used for digest reads, signature checks, preflight, and readiness.
 
 Only chains present in `chains[]` are supported; leave chains you do not relay out of the file.
 
@@ -102,7 +103,7 @@ pnpm run build
 ## Production deployment
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, and if using auth, `API_CLIENTS_JSON`.
-2. **`config/provider.json`** — copy or derive from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `allowedMacros` for your deployment.
+2. **`config/provider.json`** — copy or derive from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
 5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`

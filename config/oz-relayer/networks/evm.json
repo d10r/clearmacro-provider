@@ -1,16 +1,16 @@
 {
   "networks": [
     {
-      "network": "base-mainnet",
+      "network": "optimism-sepolia",
       "type": "evm",
-      "chain_id": 8453,
-      "is_testnet": false,
+      "chain_id": 11155420,
+      "is_testnet": true,
       "required_confirmations": 1,
       "average_blocktime_ms": 2000,
       "symbol": "ETH",
       "rpc_urls": [
-        "https://base-mainnet.rpc.x.superfluid.dev",
-        "https://developer-access-mainnet.base.org"
+        "https://rpc-endpoints.superfluid.dev/optimism-sepolia",
+        "https://sepolia.optimism.io"
       ]
     }
   ]
