@@ -2,6 +2,7 @@ import { createPublicClient, http, type PublicClient } from "viem";
 import type { LoadedRegistry } from "../config/registry.js";
 import type { RegistryChain } from "../config/schema.js";
 import type { OzRelayerClient } from "../relayer/client.js";
+import { OzRelayerRateLimitError } from "../relayer/errors.js";
 import { clearMacroForwarderV1Abi } from "../tx/builder.js";
 import { validateEoaSignature } from "../validation/clearmacro.js";
 
@@ -84,6 +85,57 @@ export async function getForwarderDigest(input: {
   });
 }
 
+export type ChainReadinessReasonCode = "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "RELAYER_RATE_LIMITED";
+
+export type ChainReadinessResult = { ready: boolean; reasonCode?: ChainReadinessReasonCode };
+
+export type ReadinessOzRetryOptions = {
+  maxAttempts: number;
+  baseDelayMs: number;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jitteredBackoffMs(attemptIndex: number, baseDelayMs: number): number {
+  const exp = baseDelayMs * 2 ** attemptIndex;
+  const jitter = Math.floor(Math.random() * Math.min(250, baseDelayMs));
+  return exp + jitter;
+}
+
+/** Retries only on `OzRelayerRateLimitError`; other errors propagate immediately. */
+export async function withOzRateLimitRetries<T>(fn: () => Promise<T>, opts: ReadinessOzRetryOptions | undefined): Promise<T> {
+  const maxAttempts = opts?.maxAttempts ?? 3;
+  const baseDelayMs = opts?.baseDelayMs ?? 100;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (e instanceof OzRelayerRateLimitError && attempt < maxAttempts - 1) {
+        const fromServer = e.retryAfterMs;
+        const delay =
+          fromServer !== undefined && fromServer > 0
+            ? Math.min(5000, fromServer + Math.floor(Math.random() * 50))
+            : jitteredBackoffMs(attempt, baseDelayMs);
+        await sleep(delay);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastError;
+}
+
+function classifyOzReadinessFailure(error: unknown): ChainReadinessReasonCode {
+  if (error instanceof OzRelayerRateLimitError) {
+    return "RELAYER_RATE_LIMITED";
+  }
+  return "RELAYER_UNAVAILABLE";
+}
+
 export async function preflightRunMacro(input: {
   chain: RegistryChain;
   forwarder: string;
@@ -119,7 +171,8 @@ export async function evaluateChainReadiness(input: {
   registry: LoadedRegistry;
   chainId: number;
   relayerClient: OzRelayerClient;
-}): Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }> {
+  ozRetry?: ReadinessOzRetryOptions;
+}): Promise<ChainReadinessResult> {
   const chain = input.registry.chainsById.get(input.chainId);
   if (!chain) {
     return { ready: false, reasonCode: "PROVIDER_NOT_READY" };
@@ -130,27 +183,29 @@ export async function evaluateChainReadiness(input: {
   }
   let relayerReady: boolean;
   try {
-    relayerReady = await input.relayerClient.ready();
-  } catch {
-    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+    relayerReady = await withOzRateLimitRetries(() => input.relayerClient.ready(), input.ozRetry);
+  } catch (error) {
+    return { ready: false, reasonCode: classifyOzReadinessFailure(error) };
   }
   if (!relayerReady) {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
   let relayer: { address: string; paused: boolean; system_disabled: boolean; network?: string | null; network_type?: string | null };
   try {
-    relayer = await input.relayerClient.getRelayer(relayerId);
-  } catch {
-    return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+    relayer = await withOzRateLimitRetries(() => input.relayerClient.getRelayer(relayerId), input.ozRetry);
+  } catch (error) {
+    return { ready: false, reasonCode: classifyOzReadinessFailure(error) };
   }
   if (relayer.paused || relayer.system_disabled) {
     return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
   }
   if (relayer.network_type && relayer.network) {
+    const nt = relayer.network_type;
+    const nn = relayer.network;
     try {
-      await input.relayerClient.getNetwork(relayer.network_type, relayer.network);
-    } catch {
-      return { ready: false, reasonCode: "RELAYER_UNAVAILABLE" };
+      await withOzRateLimitRetries(() => input.relayerClient.getNetwork(nt, nn), input.ozRetry);
+    } catch (error) {
+      return { ready: false, reasonCode: classifyOzReadinessFailure(error) };
     }
   }
   try {

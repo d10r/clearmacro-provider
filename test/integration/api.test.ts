@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { createReadyzReadinessCache } from "../../src/chain/readinessCache.js";
 import { createTestHarness } from "../fixtures/harness.js";
 import { buildClearMacroParams, buildRelayPayload } from "../fixtures/relay-fixtures.js";
 
@@ -87,6 +88,41 @@ describe("API integration", () => {
     const readyz = await app.inject({ method: "GET", url: "/readyz" });
     expect(readyz.statusCode).toBe(503);
     expect(readyz.json<{ ready: boolean }>().ready).toBe(false);
+  });
+
+  it("GET /readyz uses cached readiness while POST uses uncached readiness", async () => {
+    let readyzInnerCalls = 0;
+    let relayReadinessCalls = 0;
+    const inner = async (_chainId: number) => {
+      readyzInnerCalls += 1;
+      return { ready: true as const };
+    };
+    const cached = createReadyzReadinessCache(inner, { successTtlMs: 60_000, rateLimitedTtlMs: 1000 });
+    const { app } = await createTestHarness({
+      getReadyzChainReadiness: cached,
+      getChainReadiness: async () => {
+        relayReadinessCalls += 1;
+        return { ready: true };
+      },
+    });
+    await app.inject({ method: "GET", url: "/readyz" });
+    await app.inject({ method: "GET", url: "/readyz" });
+    const payload = await buildRelayPayload();
+    await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(readyzInnerCalls).toBe(1);
+    expect(relayReadinessCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns 503 RELAYER_RATE_LIMITED with relayer category when readiness reports rate limit", async () => {
+    const { app } = await createTestHarness({
+      getChainReadiness: async () => ({ ready: false, reasonCode: "RELAYER_RATE_LIMITED" }),
+    });
+    const payload = await buildRelayPayload();
+    const res = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(res.statusCode).toBe(503);
+    const err = res.json<{ error: { code: string; category: string } }>().error;
+    expect(err.code).toBe("RELAYER_RATE_LIMITED");
+    expect(err.category).toBe("relayer");
   });
 
   it("returns 422 when preflight reverts and force is false", async () => {

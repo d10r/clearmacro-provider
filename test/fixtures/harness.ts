@@ -25,6 +25,7 @@ export type HarnessOverrides = {
   requestMaxMetadataValueLength?: number;
   relayerClient?: OzRelayerClient;
   getChainReadiness?: AppDeps["getChainReadiness"];
+  getReadyzChainReadiness?: AppDeps["getReadyzChainReadiness"];
   getForwarderDigest?: AppDeps["getForwarderDigest"];
   validateRelaySignature?: AppDeps["validateRelaySignature"];
   preflightRunMacro?: AppDeps["preflightRunMacro"];
@@ -109,6 +110,9 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
       ? [{ id: "test-client", apiTokenHash: sha256Hex("test-token") }]
       : []);
 
+  const getChainReadiness = overrides?.getChainReadiness ?? (async () => ({ ready: true }));
+  const getReadyzChainReadiness = overrides?.getReadyzChainReadiness ?? getChainReadiness;
+
   const built = await createApp({
     registry,
     executions,
@@ -121,7 +125,8 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
     requestMaxMetadataKeys: overrides?.requestMaxMetadataKeys ?? 20,
     requestMaxMetadataValueLength: overrides?.requestMaxMetadataValueLength ?? 256,
     logLevel: "error",
-    getChainReadiness: overrides?.getChainReadiness ?? (async () => ({ ready: true })),
+    getChainReadiness,
+    getReadyzChainReadiness,
     getForwarderDigest: overrides?.getForwarderDigest ?? (async () => `0x${"11".repeat(32)}`),
     validateRelaySignature: overrides?.validateRelaySignature ?? (async () => true),
     preflightRunMacro: overrides?.preflightRunMacro ?? defaultPreflightOk,

@@ -100,6 +100,12 @@ export function loadEnv() {
     requestMaxMetadataKeys: parseInteger("REQUEST_MAX_METADATA_KEYS", 20, 0),
     requestMaxMetadataValueLength: parseInteger("REQUEST_MAX_METADATA_VALUE_LENGTH", 256, 1),
     relayerRequestTimeoutMs: parseInteger("RELAYER_REQUEST_TIMEOUT_MS", 10_000, 1),
+    /** TTL for caching a successful per-chain readiness snapshot used only by `GET /readyz` (0 disables that cache). */
+    readinessCacheSuccessTtlMs: parseInteger("READINESS_CACHE_SUCCESS_TTL_MS", 5000, 0),
+    /** TTL for caching `RELAYER_RATE_LIMITED` readiness from `GET /readyz` (0 disables). */
+    readinessCacheRateLimitedTtlMs: parseInteger("READINESS_CACHE_RATE_LIMITED_TTL_MS", 1500, 0),
+    readinessOzRetryMaxAttempts: parseInteger("READINESS_OZ_RETRY_MAX_ATTEMPTS", 3, 1),
+    readinessOzRetryBaseDelayMs: parseInteger("READINESS_OZ_RETRY_BASE_DELAY_MS", 100, 1),
   };
 }
 

@@ -12,6 +12,7 @@ import {
 import { OzRelayerClient } from "./relayer/client.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { createApp } from "./app.js";
+import { createReadyzReadinessCache } from "./chain/readinessCache.js";
 import { evaluateChainReadiness, getForwarderDigest, validateRelaySignature } from "./chain/readiness.js";
 
 async function main(): Promise<void> {
@@ -30,6 +31,21 @@ async function main(): Promise<void> {
 
   await bindRelayersToRegistry(registry, relayerClient);
 
+  const ozPollBackoff = { until: 0 };
+  const ozRetry = {
+    maxAttempts: env.readinessOzRetryMaxAttempts,
+    baseDelayMs: env.readinessOzRetryBaseDelayMs,
+  };
+  const evaluateChainReadinessUncached = (chainId: number) =>
+    evaluateChainReadiness({ registry, chainId, relayerClient, ozRetry });
+  const getReadyzChainReadiness =
+    env.readinessCacheSuccessTtlMs > 0 || env.readinessCacheRateLimitedTtlMs > 0
+      ? createReadyzReadinessCache(evaluateChainReadinessUncached, {
+          successTtlMs: env.readinessCacheSuccessTtlMs,
+          rateLimitedTtlMs: env.readinessCacheRateLimitedTtlMs,
+        })
+      : evaluateChainReadinessUncached;
+
   const { app } = await createApp({
     registry,
     executions,
@@ -42,7 +58,8 @@ async function main(): Promise<void> {
     requestMaxMetadataKeys: env.requestMaxMetadataKeys,
     requestMaxMetadataValueLength: env.requestMaxMetadataValueLength,
     logLevel: env.logLevel,
-    getChainReadiness: (chainId) => evaluateChainReadiness({ registry, chainId, relayerClient }),
+    getChainReadiness: evaluateChainReadinessUncached,
+    getReadyzChainReadiness,
     getForwarderDigest: (input) =>
       getForwarderDigest({
         registry,
@@ -87,6 +104,7 @@ async function main(): Promise<void> {
         registry,
         batchSize: env.relayerWorkerBatchSize,
         submitRetryCount: 3,
+        ozPollBackoff,
       })
         .catch((error) => {
           app.log.error({ err: error }, "Relayer worker tick failed");

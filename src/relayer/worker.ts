@@ -1,5 +1,10 @@
-import type { RelayExecutionRepository, RelayExecutionEventRepository, RelayerTransactionRepository } from "../db/repositories.js";
+import type {
+  RelayExecutionRepository,
+  RelayExecutionEventRepository,
+  RelayerTransactionRepository,
+} from "../db/repositories.js";
 import type { OzRelayerClient } from "./client.js";
+import { OzRelayerHttpError, OzRelayerRateLimitError } from "./errors.js";
 import { projectRelayerState } from "./mapper.js";
 import { buildRunMacroCalldata } from "../tx/builder.js";
 import type { LoadedRegistry } from "../config/registry.js";
@@ -15,6 +20,8 @@ export type RelayerWorkerDeps = {
   registry: LoadedRegistry;
   batchSize: number;
   submitRetryCount?: number;
+  /** When set, poll loop backs off across ticks after OZ HTTP 429. */
+  ozPollBackoff?: { until: number };
   preflightSimulation?: (input: {
     chain: LoadedRegistry["raw"]["chains"][number];
     forwarder: string;
@@ -28,6 +35,12 @@ export type RelayerWorkerDeps = {
 };
 
 function isTransientSubmitError(error: unknown): boolean {
+  if (error instanceof OzRelayerRateLimitError) {
+    return true;
+  }
+  if (error instanceof OzRelayerHttpError && error.status >= 500) {
+    return true;
+  }
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   return (
     message.includes("429") ||
@@ -45,7 +58,11 @@ function getSubmitAttemptsFromErrorJson(value: string | null): number {
   }
   try {
     const parsed = JSON.parse(value) as { submitAttempts?: unknown };
-    if (typeof parsed.submitAttempts === "number" && Number.isFinite(parsed.submitAttempts) && parsed.submitAttempts >= 0) {
+    if (
+      typeof parsed.submitAttempts === "number" &&
+      Number.isFinite(parsed.submitAttempts) &&
+      parsed.submitAttempts >= 0
+    ) {
       return parsed.submitAttempts;
     }
   } catch {
@@ -54,7 +71,9 @@ function getSubmitAttemptsFromErrorJson(value: string | null): number {
   return 0;
 }
 
-export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise<void> {
+export async function processRelayerWorkerTick(
+  deps: RelayerWorkerDeps,
+): Promise<void> {
   const submitRetryCount = deps.submitRetryCount ?? 3;
   const submittable = deps.executions.listSubmittable(deps.batchSize);
   for (const execution of submittable) {
@@ -62,11 +81,18 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
       const chain = deps.registry.chainsById.get(execution.chainId);
       if (!chain) {
         deps.executions.transitionState(execution.id, "failed", {
-          errorJson: JSON.stringify({ code: "CHAIN_NOT_ALLOWED", message: "Chain missing from registry", category: "provider", retryable: false }),
+          errorJson: JSON.stringify({
+            code: "CHAIN_NOT_ALLOWED",
+            message: "Chain missing from registry",
+            category: "provider",
+            retryable: false,
+          }),
         });
         continue;
       }
-      const relayer = await deps.relayerClient.getRelayer(execution.ozRelayerId);
+      const relayer = await deps.relayerClient.getRelayer(
+        execution.ozRelayerId,
+      );
       const skipPreflight = execution.forceAfterPreflightRevert === 1;
       if (!skipPreflight) {
         const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
@@ -84,7 +110,8 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
           deps.executions.transitionState(execution.id, "rejected", {
             errorJson: JSON.stringify({
               code: "PREFLIGHT_REVERTED",
-              message: "Post-creation safety check predicted revert before submission.",
+              message:
+                "Post-creation safety check predicted revert before submission.",
               category: "user",
               retryable: false,
             }),
@@ -131,17 +158,20 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         continue;
       }
 
-      const tx = await deps.relayerClient.submitTransaction(execution.ozRelayerId, {
-        to: execution.forwarderAddress,
-        value: execution.value,
-        data: buildRunMacroCalldata({
-          macro: execution.macroAddress,
-          params: execution.payload,
-          signer: execution.signerAddress,
-          signature: execution.signature,
-        }),
-        speed: "fast",
-      });
+      const tx = await deps.relayerClient.submitTransaction(
+        execution.ozRelayerId,
+        {
+          to: execution.forwarderAddress,
+          value: execution.value,
+          data: buildRunMacroCalldata({
+            macro: execution.macroAddress,
+            params: execution.payload,
+            signer: execution.signerAddress,
+            signature: execution.signature,
+          }),
+          speed: "fast",
+        },
+      );
       deps.relayerTransactions.upsert({
         ozTransactionId: tx.id,
         executionId: execution.id,
@@ -161,16 +191,25 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
         lastPolledAt: new Date().toISOString(),
       });
-      deps.executions.applySubmitAcknowledgement(execution.id, tx.id, tx.hash ? (tx.hash as `0x${string}`) : null);
+      deps.executions.applySubmitAcknowledgement(
+        execution.id,
+        tx.id,
+        tx.hash ? (tx.hash as `0x${string}`) : null,
+      );
       deps.executionEvents.append({
         executionId: execution.id,
         type: "relayer_submit_accepted",
         actor: "worker",
         reason: "Relayer accepted transaction intent",
-        detailsJson: JSON.stringify({ ozTransactionId: tx.id, status: tx.status }),
+        detailsJson: JSON.stringify({
+          ozTransactionId: tx.id,
+          status: tx.status,
+        }),
       });
     } catch (error) {
-      const currentAttempts = getSubmitAttemptsFromErrorJson(execution.lastErrorJson);
+      const currentAttempts = getSubmitAttemptsFromErrorJson(
+        execution.lastErrorJson,
+      );
       const nextAttempts = currentAttempts + 1;
       const errorPayload = JSON.stringify({
         code: "RELAYER_SUBMIT_ERROR",
@@ -185,7 +224,10 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
           type: "relayer_submit_retry_scheduled",
           actor: "worker",
           reason: "Transient relayer submission failure",
-          detailsJson: JSON.stringify({ submitAttempts: nextAttempts, retryLimit: submitRetryCount }),
+          detailsJson: JSON.stringify({
+            submitAttempts: nextAttempts,
+            retryLimit: submitRetryCount,
+          }),
         });
         continue;
       }
@@ -202,112 +244,154 @@ export async function processRelayerWorkerTick(deps: RelayerWorkerDeps): Promise
         type: "terminal_error_set",
         actor: "worker",
         reason: "Relayer submission failed",
-        detailsJson: JSON.stringify({ message: error instanceof Error ? error.message : "unknown" }),
+        detailsJson: JSON.stringify({
+          message: error instanceof Error ? error.message : "unknown",
+        }),
       });
     }
   }
 
   const pollable = deps.executions.listPollable(deps.batchSize);
-  for (const execution of pollable) {
-    if (!execution.ozTransactionId) {
-      continue;
-    }
-    try {
-      const tx = await deps.relayerClient.getTransaction(execution.ozRelayerId, execution.ozTransactionId);
-      deps.relayerTransactions.upsert({
-        ozTransactionId: tx.id,
-        executionId: execution.id,
-        ozRelayerId: execution.ozRelayerId,
-        status: tx.status,
-        statusReason: tx.status_reason,
-        txHash: tx.hash,
-        nonce: tx.nonce === null ? null : String(tx.nonce),
-        gasLimit: tx.gas_limit === null ? null : String(tx.gas_limit),
-        gasPrice: tx.gas_price,
-        maxFeePerGas: tx.max_fee_per_gas,
-        maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
-        rawJson: JSON.stringify(tx),
-        submittedAt: tx.sent_at,
-        includedAt: tx.mined_at ?? null,
-        confirmedAt: tx.confirmed_at,
-        receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
-        lastPolledAt: new Date().toISOString(),
-      });
-      if (tx.hash && tx.hash !== execution.currentTransactionHash) {
-        deps.executions.appendCurrentHashChange(execution.id, tx.hash as `0x${string}`);
+  const skipPollsUntil = deps.ozPollBackoff?.until ?? 0;
+  if (Date.now() >= skipPollsUntil) {
+    for (const execution of pollable) {
+      if (deps.ozPollBackoff && Date.now() < deps.ozPollBackoff.until) {
+        break;
+      }
+      if (!execution.ozTransactionId) {
+        continue;
+      }
+      try {
+        const tx = await deps.relayerClient.getTransaction(
+          execution.ozRelayerId,
+          execution.ozTransactionId,
+        );
+        deps.relayerTransactions.upsert({
+          ozTransactionId: tx.id,
+          executionId: execution.id,
+          ozRelayerId: execution.ozRelayerId,
+          status: tx.status,
+          statusReason: tx.status_reason,
+          txHash: tx.hash,
+          nonce: tx.nonce === null ? null : String(tx.nonce),
+          gasLimit: tx.gas_limit === null ? null : String(tx.gas_limit),
+          gasPrice: tx.gas_price,
+          maxFeePerGas: tx.max_fee_per_gas,
+          maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
+          rawJson: JSON.stringify(tx),
+          submittedAt: tx.sent_at,
+          includedAt: tx.mined_at ?? null,
+          confirmedAt: tx.confirmed_at,
+          receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
+          lastPolledAt: new Date().toISOString(),
+        });
+        if (tx.hash && tx.hash !== execution.currentTransactionHash) {
+          deps.executions.appendCurrentHashChange(
+            execution.id,
+            tx.hash as `0x${string}`,
+          );
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: execution.currentTransactionHash
+              ? "transaction_hash_replaced"
+              : "transaction_hash_observed",
+            actor: "worker",
+            reason: execution.currentTransactionHash
+              ? "Replacement hash observed"
+              : "First hash observed",
+            detailsJson: JSON.stringify({ hash: tx.hash }),
+          });
+          const refreshed = deps.executions.getByIdOrThrow(execution.id);
+          if (
+            refreshed.state === "pending" &&
+            refreshed.currentTransactionHash
+          ) {
+            deps.executions.transitionState(refreshed.id, "submitted");
+          }
+        }
+
+        let receipt: RelayExecutionReceipt | null = null;
+        if (tx.receipt) {
+          const raw: RawOzReceipt = {
+            transactionHash: tx.receipt.transactionHash,
+            blockNumber: tx.receipt.blockNumber,
+            status: tx.receipt.status,
+          };
+          if (tx.receipt.blockHash !== undefined) {
+            raw.blockHash = tx.receipt.blockHash;
+          }
+          if (tx.receipt.gasUsed !== undefined) {
+            raw.gasUsed = tx.receipt.gasUsed;
+          }
+          receipt = normalizeOzReceipt(raw);
+        }
+
+        const projected = projectRelayerState({
+          status: tx.status,
+          statusReason: tx.status_reason,
+          hash: tx.hash,
+          confirmedAt: tx.confirmed_at,
+          receipt,
+          requiredConfirmations: execution.requiredConfirmations,
+        });
+
+        const metadataUpdates: {
+          receipt?: RelayExecutionReceipt;
+          error?: {
+            code: string;
+            message: string;
+            category: "user" | "provider" | "chain" | "relayer" | "unknown";
+            retryable: boolean;
+          };
+        } = {};
+        if (receipt) {
+          metadataUpdates.receipt = receipt;
+        }
+        if (projected.error) {
+          metadataUpdates.error = projected.error;
+        }
+        deps.executions.updateMetadata(execution.id, metadataUpdates);
+        const latest = deps.executions.getByIdOrThrow(execution.id);
+        if (latest.state !== projected.state) {
+          deps.executions.transitionState(execution.id, projected.state);
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: "state_changed",
+            actor: "worker",
+            reason: `Projected state: ${projected.state}`,
+            detailsJson: JSON.stringify({
+              relayerStatus: tx.status,
+              statusReason: tx.status_reason,
+            }),
+          });
+        }
+      } catch (error) {
+        if (error instanceof OzRelayerRateLimitError) {
+          if (deps.ozPollBackoff) {
+            const base =
+              error.retryAfterMs !== undefined && error.retryAfterMs > 0
+                ? Math.min(5000, error.retryAfterMs)
+                : 300;
+            deps.ozPollBackoff.until =
+              Date.now() + base + Math.floor(Math.random() * 400);
+          }
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: "relayer_poll_rate_limited",
+            actor: "worker",
+            reason: "OpenZeppelin relayer rate limit during status poll",
+            detailsJson: JSON.stringify({}),
+          });
+          break;
+        }
         deps.executionEvents.append({
           executionId: execution.id,
-          type: execution.currentTransactionHash ? "transaction_hash_replaced" : "transaction_hash_observed",
+          type: "relayer_status_polled",
           actor: "worker",
-          reason: execution.currentTransactionHash ? "Replacement hash observed" : "First hash observed",
-          detailsJson: JSON.stringify({ hash: tx.hash }),
-        });
-        const refreshed = deps.executions.getByIdOrThrow(execution.id);
-        if (refreshed.state === "pending" && refreshed.currentTransactionHash) {
-          deps.executions.transitionState(refreshed.id, "submitted");
-        }
-      }
-
-      let receipt: RelayExecutionReceipt | null = null;
-      if (tx.receipt) {
-        const raw: RawOzReceipt = {
-          transactionHash: tx.receipt.transactionHash,
-          blockNumber: tx.receipt.blockNumber,
-          status: tx.receipt.status,
-        };
-        if (tx.receipt.blockHash !== undefined) {
-          raw.blockHash = tx.receipt.blockHash;
-        }
-        if (tx.receipt.gasUsed !== undefined) {
-          raw.gasUsed = tx.receipt.gasUsed;
-        }
-        receipt = normalizeOzReceipt(raw);
-      }
-
-      const projected = projectRelayerState({
-        status: tx.status,
-        statusReason: tx.status_reason,
-        hash: tx.hash,
-        confirmedAt: tx.confirmed_at,
-        receipt,
-        requiredConfirmations: execution.requiredConfirmations,
-      });
-
-      const metadataUpdates: {
-        receipt?: RelayExecutionReceipt;
-        error?: {
-          code: string;
-          message: string;
-          category: "user" | "provider" | "chain" | "relayer" | "unknown";
-          retryable: boolean;
-        };
-      } = {};
-      if (receipt) {
-        metadataUpdates.receipt = receipt;
-      }
-      if (projected.error) {
-        metadataUpdates.error = projected.error;
-      }
-      deps.executions.updateMetadata(execution.id, metadataUpdates);
-      const latest = deps.executions.getByIdOrThrow(execution.id);
-      if (latest.state !== projected.state) {
-        deps.executions.transitionState(execution.id, projected.state);
-        deps.executionEvents.append({
-          executionId: execution.id,
-          type: "state_changed",
-          actor: "worker",
-          reason: `Projected state: ${projected.state}`,
-          detailsJson: JSON.stringify({ relayerStatus: tx.status, statusReason: tx.status_reason }),
+          reason: "Relayer polling error",
+          detailsJson: JSON.stringify({}),
         });
       }
-    } catch {
-      deps.executionEvents.append({
-        executionId: execution.id,
-        type: "relayer_status_polled",
-        actor: "worker",
-        reason: "Relayer polling error",
-        detailsJson: JSON.stringify({}),
-      });
     }
   }
 }

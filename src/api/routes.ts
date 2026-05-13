@@ -21,7 +21,7 @@ import type {
 import { projectRelayerState } from "../relayer/mapper.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import { hashCanonicalCreateBody } from "./canonicalBody.js";
-import { preflightRunMacro } from "../chain/readiness.js";
+import { preflightRunMacro, type ChainReadinessResult } from "../chain/readiness.js";
 import type { RegistryChain } from "../config/schema.js";
 
 export type RegisterRoutesDeps = {
@@ -36,7 +36,8 @@ export type RegisterRoutesDeps = {
   resolveClientIdFromBearer: (bearerToken: string) => string | null;
   requestMaxMetadataKeys: number;
   requestMaxMetadataValueLength: number;
-  getChainReadiness: (chainId: number) => Promise<{ ready: boolean; reasonCode?: "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" }>;
+  getChainReadiness: (chainId: number) => Promise<ChainReadinessResult>;
+  getReadyzChainReadiness: (chainId: number) => Promise<ChainReadinessResult>;
   getForwarderDigest: (input: { chainId: number; forwarder: string; macro: string; params: string }) => Promise<string>;
   validateRelaySignature: (input: { chainId: number; signer: string; digest: string; signature: string }) => Promise<boolean>;
   /** Test override hook; defaults to real `preflightRunMacro`. */
@@ -138,7 +139,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
     const checks = await Promise.all(
       chains.map(async (chain) => ({
         chainId: chain.chainId,
-        result: await deps.getChainReadiness(chain.chainId),
+        result: await deps.getReadyzChainReadiness(chain.chainId),
       })),
     );
     const allReady = checks.every((check) => check.result.ready);
@@ -298,7 +299,8 @@ export async function registerRoutes(app: FastifyInstance, deps: RegisterRoutesD
       const readiness = await deps.getChainReadiness(body.chainId);
       if (!readiness.ready) {
         deps.createRequestAudit.append({ ...auditBase, outcomeCode: "READINESS_UNAVAILABLE", executionId: null });
-        throw new ApiError(503, readiness.reasonCode ?? "PROVIDER_NOT_READY", "Requested chain is not ready.", "provider", true);
+        const category = readiness.reasonCode === "RELAYER_RATE_LIMITED" ? "relayer" : "provider";
+        throw new ApiError(503, readiness.reasonCode ?? "PROVIDER_NOT_READY", "Requested chain is not ready.", category, true);
       }
 
       let digest: string;

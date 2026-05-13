@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # SQLite on a Docker named volume is typically root-owned; the image runs as `node` (Dockerfile).
+    # Run as root here so migrations and WAL can write under `/data` (same pattern as compose.e2e.yaml).
+    user: "0:0"
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -53,9 +56,15 @@ services:
       STORAGE_ENCRYPTION_KEY: ${OZ_STORAGE_ENCRYPTION_KEY:?set OZ_STORAGE_ENCRYPTION_KEY}
       API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
       WEBHOOK_SIGNING_KEY: ${OZ_WEBHOOK_SIGNING_KEY:?set OZ_WEBHOOK_SIGNING_KEY}
+      # OpenZeppelin image accepts passphrase under either name; set both (see compose.dashboard-op-sepolia.yaml).
+      OZ_KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:?set OZ_KEYSTORE_PASSPHRASE}
       KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:?set OZ_KEYSTORE_PASSPHRASE}
       LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
       IN_DOCKER: "true"
+      # Above stock OZ defaults (100/300/100): single expected HTTP client is this app; reduces 429 under /readyz + worker.
+      RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_REQUESTS_PER_SECOND:-500}
+      RATE_LIMIT_BURST_SIZE: ${RATE_LIMIT_BURST_SIZE:-600}
+      RELAYER_CONCURRENCY_LIMIT: ${RELAYER_CONCURRENCY_LIMIT:-200}
     volumes:
       - ./config/oz-relayer:/app/config:ro
 

@@ -45,6 +45,10 @@ services:
       LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
       IN_DOCKER: "true"
       RPC_BLOCK_PRIVATE_IPS: "false"
+      # Single HTTP client (clearmacro-provider) in dev; stock defaults can 429 under burst /readyz + worker.
+      RATE_LIMIT_REQUESTS_PER_SECOND: "500"
+      RATE_LIMIT_BURST_SIZE: "600"
+      RELAYER_CONCURRENCY_LIMIT: "200"
     ports:
       - "${OZ_RELAYER_PORT:-8080}:8080"
       - "${OZ_RELAYER_METRICS_PORT:-8081}:8081"

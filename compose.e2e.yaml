@@ -53,6 +53,10 @@ services:
       LOG_LEVEL: ${OZ_LOG_LEVEL:-info}
       IN_DOCKER: "true"
       RPC_BLOCK_PRIVATE_IPS: "false"
+      # E2E stack: one provider + tests; reduce 429 flakiness vs stock OZ limits.
+      RATE_LIMIT_REQUESTS_PER_SECOND: "500"
+      RATE_LIMIT_BURST_SIZE: "600"
+      RELAYER_CONCURRENCY_LIMIT: "200"
     volumes:
       - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/app/config:ro
 

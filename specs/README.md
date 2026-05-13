@@ -12,6 +12,7 @@
 | Document | Role |
 |----------|------|
 | [`operations.md`](./operations.md) | Deploy, backup, CI, local stack |
+| [`oz-relayer-readiness-rate-limit-findings.md`](./oz-relayer-readiness-rate-limit-findings.md) | **`readyz` vs OZ 429**, readiness call pattern, recommendations for **dev/test and production** (compose, provider, observability) |
 
 ## Historical / superseded
 

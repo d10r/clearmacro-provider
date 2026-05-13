@@ -16,7 +16,6 @@
     "test": "vitest run",
     "test:e2e": "vitest run test/e2e",
     "test:e2e:stack": "RUN_STACK_E2E=1 vitest run test/e2e/relay-stack.e2e.test.ts",
-    "stack:e2e": "bash scripts/run-stack-e2e.sh",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:watch": "vitest",

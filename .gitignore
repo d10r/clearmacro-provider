@@ -20,6 +20,9 @@ coverage/
 pnpm-debug.log*
 .pnpm-store/
 
+.cache/
+tmp/
+
 cache/
 out/
 

@@ -26,6 +26,7 @@ export type AppDeps = {
   requestMaxMetadataValueLength: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
   getChainReadiness: RegisterRoutesDeps["getChainReadiness"];
+  getReadyzChainReadiness: RegisterRoutesDeps["getReadyzChainReadiness"];
   getForwarderDigest: RegisterRoutesDeps["getForwarderDigest"];
   validateRelaySignature: RegisterRoutesDeps["validateRelaySignature"];
   preflightRunMacro?: RegisterRoutesDeps["preflightRunMacro"];
@@ -62,6 +63,7 @@ export async function createApp(deps: AppDeps) {
     requestMaxMetadataKeys: deps.requestMaxMetadataKeys,
     requestMaxMetadataValueLength: deps.requestMaxMetadataValueLength,
     getChainReadiness: deps.getChainReadiness,
+    getReadyzChainReadiness: deps.getReadyzChainReadiness,
     getForwarderDigest: deps.getForwarderDigest,
     validateRelaySignature: deps.validateRelaySignature,
     ...(deps.preflightRunMacro !== undefined ? { preflightRunMacro: deps.preflightRunMacro } : {}),

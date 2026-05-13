@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRegistry } from "../../src/config/registry.js";
 import { evaluateChainReadiness } from "../../src/chain/readiness.js";
+import { OzRelayerRateLimitError } from "../../src/relayer/errors.js";
 import { installMockAgent } from "../fixtures/undici-mocks.js";
 
 let restoreDispatcher: (() => void) | undefined;
@@ -11,6 +12,7 @@ let restoreDispatcher: (() => void) | undefined;
 afterEach(() => {
   restoreDispatcher?.();
   restoreDispatcher = undefined;
+  vi.unstubAllGlobals();
 });
 
 function makeRegistry(rpcUrl: string) {
@@ -165,6 +167,48 @@ describe("chain readiness matrix", () => {
       } as never,
     });
     expect(readiness).toEqual({ ready: false, reasonCode: "RELAYER_UNAVAILABLE" });
+  });
+
+  it("returns RELAYER_RATE_LIMITED when OZ returns 429 after retries are exhausted", async () => {
+    let readyCalls = 0;
+    const readiness = await evaluateChainReadiness({
+      registry: makeRegistry("http://rpc.test"),
+      chainId: 1,
+      relayerClient: {
+        ready: async () => {
+          readyCalls += 1;
+          throw new OzRelayerRateLimitError("limit", 429, "/api/v1/ready", 1);
+        },
+      } as never,
+      ozRetry: { maxAttempts: 2, baseDelayMs: 1 },
+    });
+    expect(readiness).toEqual({ ready: false, reasonCode: "RELAYER_RATE_LIMITED" });
+    expect(readyCalls).toBe(2);
+  });
+
+  it("recovers when ready() succeeds after transient rate limits", async () => {
+    let n = 0;
+    const readiness = await evaluateChainReadiness({
+      registry: makeRegistry("http://rpc.test"),
+      chainId: 1,
+      relayerClient: {
+        ready: async () => {
+          n += 1;
+          if (n < 2) {
+            throw new OzRelayerRateLimitError("limit", 429, "/api/v1/ready", 1);
+          }
+          return true;
+        },
+        getRelayer: async () => ({
+          address: "0x00000000000000000000000000000000000000aa",
+          paused: false,
+          system_disabled: false,
+        }),
+      } as never,
+      ozRetry: { maxAttempts: 4, baseDelayMs: 1 },
+    });
+    expect(readiness).toEqual({ ready: false, reasonCode: "PROVIDER_NOT_READY" });
+    expect(n).toBeGreaterThanOrEqual(2);
   });
 
   it("returns ready true when relayer and rpc checks pass", async () => {

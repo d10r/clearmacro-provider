@@ -45,7 +45,7 @@ Unit and integration tests use temporary SQLite databases and mocked relayer/RPC
 
 Contract-backed **preflight** integration tests (`test/integration/preflight-anvil.test.ts`) spawn **Anvil** and require the `anvil` binary on `PATH` (e.g. [Foundry](https://book.getfoundry.sh/getting-started/installation)).
 
-**Docker stack E2E** (`pnpm run stack:e2e` or `bash scripts/run-stack-e2e.sh` — same as `RUN_STACK_E2E=1 pnpm run test:e2e:stack`) brings up **Anvil, then Redis, OpenZeppelin Relayer, and the provider app** via [compose.e2e.yaml](compose.e2e.yaml). It deploys the **Superfluid test framework**, **`ClearMacroForwarderV1`**, and **`StackE2EClearMacro`** on Anvil (see [full-local-stack-e2e-plan.md](./full-local-stack-e2e-plan.md)), writes a temp **registry** and **OZ config**, then drives **`GET /v1/capabilities`**, **`POST /v1/relay-executions`** with a real forwarder **digest** signature, and polls until **`succeeded`** with a success **receipt**. Requires **Docker**, **Docker Compose v2**, **Foundry** (`forge build` for `test/fixtures/contracts`), and a one-time **`pnpm run oz:bootstrap:anvil`** if `config/oz-relayer/keys/anvil-relayer.json` is missing. First app image build can take several minutes.
+**Docker stack E2E** (`pnpm run test:e2e:stack` or `bash scripts/run-stack-e2e.sh` — both set `RUN_STACK_E2E=1` and run [test/e2e/relay-stack.e2e.test.ts](../test/e2e/relay-stack.e2e.test.ts)) brings up **Anvil, then Redis, OpenZeppelin Relayer, and the provider app** via [compose.e2e.yaml](../compose.e2e.yaml). It deploys the **Superfluid test framework**, **`ClearMacroForwarderV1`**, and **`StackE2EClearMacro`** on Anvil (see [full-local-stack-e2e-plan.md](./full-local-stack-e2e-plan.md)), writes a temp **registry** and **OZ config**, then drives **`GET /v1/capabilities`**, **`POST /v1/relay-executions`** with a real forwarder **digest** signature, and polls until **`succeeded`** with a success **receipt**. Requires **Docker**, **Docker Compose v2**, **Foundry** (`forge build` for `test/fixtures/contracts`), and a one-time **`pnpm run oz:bootstrap:anvil`** if `config/oz-relayer/keys/anvil-relayer.json` is missing. First app image build can take several minutes.
 
 ## Production
 
@@ -60,10 +60,12 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
 2. Provide **`config/provider.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`).
 3. Provide OpenZeppelin Relayer config and keystores under **`config/oz-relayer/`** (keys not in git).
 4. Ensure **exactly one** active relayer per configured chain is discoverable via the relayer API at app startup.
-5. `docker compose -f compose.prod.yaml up -d --build`
+5. `docker compose -f compose.prod.yaml up -d --build` (or `pnpm run stack:prod` from the repo root — same compose file).
 6. Verify **`GET /readyz`**, relayer **`GET /api/v1/ready`**, then smoke **`GET /v1/capabilities`** and a controlled **`POST /v1/relay-executions`**.
 
 Self-contained stack: app + relayer + Redis. Do not horizontally scale multiple app workers against the same SQLite file.
+
+**Compose note:** [compose.prod.yaml](../compose.prod.yaml) runs the **app** service as **`user: "0:0"`** so SQLite can read/write on the Docker **named volume** at `/data` (the runtime image otherwise uses `USER node`, which typically cannot create the DB on a root-owned volume). The OZ relayer container is unchanged.
 
 ## Data and backups
 

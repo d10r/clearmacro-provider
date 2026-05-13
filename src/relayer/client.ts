@@ -1,3 +1,5 @@
+import { OzRelayerHttpError, OzRelayerRateLimitError } from "./errors.js";
+
 export type OzEnvelope<T> = {
   success: boolean;
   data: T | null;
@@ -50,6 +52,85 @@ export type OzNetwork = {
   required_confirmations?: number | null;
 };
 
+/**
+ * RFC 7231 `Retry-After`: delay-seconds (integer) or HTTP-date → milliseconds until retry.
+ */
+function retryAfterHeaderValueToMs(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    if (!Number.isNaN(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+  }
+  const when = Date.parse(trimmed);
+  if (!Number.isNaN(when)) {
+    return Math.max(0, when - Date.now());
+  }
+  return undefined;
+}
+
+function headerFirst(headers: Headers, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const raw = headers.get(name);
+    if (raw !== null && raw.trim().length > 0) {
+      return raw;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Standard `Retry-After` and actix-governor `x-ratelimit-after` (both use **whole seconds**).
+ */
+function parseRateLimitHeadersToMs(headers: Headers): number | undefined {
+  const retryAfter = headerFirst(headers, ["retry-after", "Retry-After"]);
+  if (retryAfter) {
+    const ms = retryAfterHeaderValueToMs(retryAfter);
+    if (ms !== undefined) {
+      return ms;
+    }
+  }
+  const xRateLimitAfter = headerFirst(headers, ["x-ratelimit-after", "X-Ratelimit-After", "X-RateLimit-After"]);
+  if (xRateLimitAfter) {
+    const seconds = Number.parseFloat(xRateLimitAfter.trim());
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.max(0, Math.ceil(seconds * 1000));
+    }
+  }
+  return undefined;
+}
+
+/**
+ * OpenZeppelin Relayer API-key governor puts `after` in the JSON body as **whole seconds**
+ * (`wait_time_from(..).as_secs()` in `openzeppelin-relayer` `config/rate_limit.rs`).
+ */
+function parseOpenZeppelinJsonAfterToMs(bodyText: string): number | undefined {
+  try {
+    const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+    const after = parsed.after;
+    if (typeof after === "number" && Number.isFinite(after)) {
+      return Math.max(0, Math.ceil(after) * 1000);
+    }
+    if (typeof after === "string") {
+      const t = after.trim();
+      if (/^\d+(\.\d+)?$/.test(t)) {
+        const seconds = Number.parseFloat(t);
+        if (Number.isFinite(seconds) && seconds >= 0) {
+          return Math.max(0, Math.ceil(seconds * 1000));
+        }
+      }
+      const when = Date.parse(t);
+      if (!Number.isNaN(when)) {
+        return Math.max(0, when - Date.now());
+      }
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return undefined;
+}
+
 function extractRelayerListPayload(data: unknown): Array<{ id: string }> {
   if (Array.isArray(data)) {
     return data.filter((item): item is { id: string } => typeof item === "object" && item !== null && "id" in item && typeof (item as { id: string }).id === "string");
@@ -89,7 +170,22 @@ export class OzRelayerClient {
         signal: controller.signal,
       });
       if (!response.ok) {
-        throw new Error(`Relayer HTTP ${response.status}`);
+        const bodyText = await response.text();
+        const snippet = bodyText.length > 400 ? `${bodyText.slice(0, 400)}…` : bodyText;
+        if (response.status === 429) {
+          const retryAfterMs = parseRateLimitHeadersToMs(response.headers) ?? parseOpenZeppelinJsonAfterToMs(bodyText);
+          throw new OzRelayerRateLimitError(
+            snippet ? `Relayer HTTP 429: ${snippet}` : "Relayer HTTP 429",
+            429,
+            path,
+            retryAfterMs,
+          );
+        }
+        throw new OzRelayerHttpError(
+          snippet ? `Relayer HTTP ${response.status}: ${snippet}` : `Relayer HTTP ${response.status}`,
+          response.status,
+          path,
+        );
       }
       return (await response.json()) as T;
     } finally {

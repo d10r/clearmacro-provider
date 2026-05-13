@@ -11,6 +11,7 @@ import {
   type NewRelayExecution,
 } from "../../src/db/repositories.js";
 import { processRelayerWorkerTick } from "../../src/relayer/worker.js";
+import { OzRelayerRateLimitError } from "../../src/relayer/errors.js";
 import { loadRegistry } from "../../src/config/registry.js";
 
 function createExecutionInput(overrides?: Partial<NewRelayExecution>): NewRelayExecution {
@@ -542,5 +543,37 @@ describe("relayer worker", () => {
     });
     expect(executions.getByIdOrThrow(created.id).state).toBe("rejected");
     expect(executions.getByIdOrThrow(created.id).terminal).toBe(1);
+  });
+
+  it("sets poll backoff and records relayer_poll_rate_limited when getTransaction hits 429", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createExecutionInput());
+    executions.transitionState(created.id, "submitted", { ozTransactionId: "oz-tx-rl" });
+    const ozPollBackoff = { until: 0 };
+    const relayerClient = {
+      getRelayer: async () => ({
+        address: "0x0000000000000000000000000000000000000010",
+        paused: false,
+        system_disabled: false,
+      }),
+      submitTransaction: async () => {
+        throw new Error("not used");
+      },
+      getTransaction: async () => {
+        throw new OzRelayerRateLimitError("rl", 429, "/", 200);
+      },
+    };
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightSimulation: async () => "ok",
+      ozPollBackoff,
+    });
+    expect(ozPollBackoff.until).toBeGreaterThan(0);
+    expect(executionEvents.listByExecution(created.id).some((e) => e.type === "relayer_poll_rate_limited")).toBe(true);
   });
 });
