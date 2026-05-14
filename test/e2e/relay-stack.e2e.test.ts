@@ -112,6 +112,8 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
       E2E_OZ_RELAYER_API_KEY: E2E_OZ_API_KEY,
       OZ_KEYSTORE_PASSPHRASE: process.env.OZ_KEYSTORE_PASSPHRASE ?? "change-me",
       OZ_STORAGE_ENCRYPTION_KEY: process.env.OZ_STORAGE_ENCRYPTION_KEY ?? "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      OZ_RELAYER_UID: String(typeof process.getuid === "function" ? process.getuid() : 1000),
+      OZ_RELAYER_GID: String(typeof process.getgid === "function" ? process.getgid() : 1000),
     });
 
     const failWithLogs = (msg: string): never => {

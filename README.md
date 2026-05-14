@@ -69,6 +69,8 @@ Minimal v1 shape:
 
 Only chains present in `chains[]` are supported; leave chains you do not relay out of the file.
 
+**Minimal starter (tracked in git):** `config/provider.example.json` — copy to `config/provider.json` and replace placeholder RPCs/addresses before `pnpm run prod:init` or first run.
+
 **Superfluid-wide templates** (from `@superfluid-finance/metadata`: MacroForwarder per chain, `publicRPCs` as `rpcUrls`, empty `allowedMacros`):
 
 - `config/provider.superfluid-mainnets.json` — mainnets only (typical production starting point).
@@ -102,8 +104,8 @@ pnpm run build
 
 ## Production deployment
 
-1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, and if using auth, `API_CLIENTS_JSON`.
-2. **`config/provider.json`** — copy or derive from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `macroPolicy` for your deployment.
+1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** (same as `id -u` / `id -g` for the user that owns `config/oz-relayer/keys/*`; required for `compose.prod.yaml`; on POSIX, `pnpm run prod:init` fills these when missing), and if using auth, `API_CLIENTS_JSON`.
+2. **`config/provider.json`** — start from `config/provider.example.json` (minimal shape), or copy from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
 5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`

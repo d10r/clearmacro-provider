@@ -92,6 +92,11 @@ async function run(): Promise<void> {
   requireSecret("OZ_KEYSTORE_PASSPHRASE");
   requireSecret("OZ_STORAGE_ENCRYPTION_KEY");
 
+  if (typeof process.getuid === "function" && typeof process.getgid === "function") {
+    requireSecret("OZ_RELAYER_UID");
+    requireSecret("OZ_RELAYER_GID");
+  }
+
   const providerConfigPathValue = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
   const providerConfigPath = resolve(providerConfigPathValue);
   const relayerConfigPath = resolve(process.env.OZ_RELAYER_CONFIG_PATH ?? "config/oz-relayer/config.json");

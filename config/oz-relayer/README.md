@@ -4,6 +4,10 @@ This directory is mounted into the OpenZeppelin Relayer container at `/app/confi
 
 The checked-in files are safe templates for local wiring. Before production, provide real network definitions, RPC URLs, and signer configuration here. Put production signer keystores in `config/oz-relayer/keys/` (that directory is gitignored so keys never ship in the repo).
 
+## Docker bind mounts and keystore permissions
+
+Compose mounts this directory at `/app/config` **read-only**. Keystore JSON from `pnpm run prod:init` is typically **`0600`** and owned by your login user. The OpenZeppelin Relayer container must run **as that same numeric UID/GID**, or startup will fail with a keystore `Permission denied` panic. Set **`OZ_RELAYER_UID`** and **`OZ_RELAYER_GID`** in `.env` to `id -u` / `id -g` on the host that owns `config/oz-relayer/keys/` (see `compose.prod.yaml` `user:` on the `oz-relayer` service). On Linux/macOS, **`pnpm run prod:init`** appends these to `.env` from `getuid`/`getgid` when they are missing. Local **`compose.yaml`** defaults to `1000:1000` if unset.
+
 ## Generate `networks/evm.json` from the registry
 
 From the repo root (after `pnpm install`), `@superfluid-finance/metadata` supplies chain names, testnet flag, native symbol, and public RPC fallbacks; your `config/provider.json` lists which chains to include and should set **`rpcUrls`** first when you use private endpoints.

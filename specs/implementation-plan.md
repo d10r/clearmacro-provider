@@ -61,7 +61,7 @@ test/
 scripts/
   migrate.ts
 config/
-  registry.example.json
+  provider.example.json
   oz-relayer/
     config.json
     networks/
@@ -118,7 +118,7 @@ Do not read environment variables directly outside `config/env.ts`.
 
 ## Static Registry Format
 
-`config/registry.example.json` is the canonical example. Each enabled chain includes the OpenZeppelin Relayer ID used for that chain:
+`config/provider.example.json` is the tracked **minimal** example for the current static config format (copy to `config/provider.json` for local/prod). The older multi-field registry sketch below is **not** the on-disk schema anymore; see `src/config/schema.ts` and `config/provider.example.json` for the real shape:
 
 ```json
 {

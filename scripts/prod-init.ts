@@ -41,6 +41,22 @@ function ensureEnvSecret(name: string, value: string): void {
   console.log(`Generated ${name} and wrote it to .env`);
 }
 
+/** For Docker Compose: bind-mounted keystores are often 0600; relayer container must run as that owner. */
+function ensureDockerComposeRelayerUser(): void {
+  if (process.env.OZ_RELAYER_UID && process.env.OZ_RELAYER_GID) return;
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+    console.warn(
+      "OZ_RELAYER_UID/OZ_RELAYER_GID not set and POSIX getuid/getgid unavailable; set both in .env for compose.prod.yaml (see .env.example).",
+    );
+    return;
+  }
+  const uid = String(process.getuid());
+  const gid = String(process.getgid());
+  ensureEnvSecret("OZ_RELAYER_UID", uid);
+  ensureEnvSecret("OZ_RELAYER_GID", gid);
+  console.log(`Set OZ_RELAYER_UID and OZ_RELAYER_GID for Docker Compose (keystore owner uid/gid=${uid}/${gid}).`);
+}
+
 function generateKeystorePassphrase(): string {
   return `Cm-${randomBytes(32).toString("base64url")}-1aA!`;
 }
@@ -93,6 +109,7 @@ async function run(): Promise<void> {
   ensureEnvSecret("OZ_KEYSTORE_PASSPHRASE", generateKeystorePassphrase());
   ensureEnvSecret("OZ_WEBHOOK_SIGNING_KEY", generateWebhookSigningKey());
   ensureEnvSecret("OZ_STORAGE_ENCRYPTION_KEY", generateStorageEncryptionKey());
+  ensureDockerComposeRelayerUser();
   const passphrase = requireEnv("OZ_KEYSTORE_PASSPHRASE");
   const providerConfigPathValue = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
   const providerConfigPath = resolve(providerConfigPathValue);
@@ -102,7 +119,10 @@ async function run(): Promise<void> {
   const signerId = process.env.OZ_RELAYER_SIGNER_ID ?? "prod-signer";
 
   if (!existsSync(providerConfigPath)) {
-    throw new Error(`Provider config not found: ${providerConfigPath}`);
+    throw new Error(
+      `Provider config not found: ${providerConfigPath}\n` +
+        `Create it first, e.g. copy config/provider.example.json to config/provider.json (or set PROVIDER_CONFIG_PATH) and edit rpcUrls / macroPolicy before running prod:init.`,
+    );
   }
 
   mkdirSync(dirname(relayerConfigPath), { recursive: true });

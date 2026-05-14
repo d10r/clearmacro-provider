@@ -28,6 +28,8 @@ services:
   oz-relayer:
     image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
     restart: unless-stopped
+    # Match ownership of bind-mounted ./config/oz-relayer/keys (defaults suit many Linux desktops).
+    user: "${OZ_RELAYER_UID:-1000}:${OZ_RELAYER_GID:-1000}"
     depends_on:
       - redis
       - anvil

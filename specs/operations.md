@@ -53,11 +53,12 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
    - `OZ_RELAYER_API_KEY`
    - `PROVIDER_NAME` (must match dapp `payload.security.provider`)
    - Relayer secrets (`OZ_KEYSTORE_PASSPHRASE`, etc.)
+   - **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** — must match `id -u` / `id -g` of the user that owns `config/oz-relayer/keys/` (keystores are often `0600`; the `oz-relayer` container runs as this UID/GID so bind mounts stay readable). On Linux/macOS, `pnpm run prod:init` writes these into `.env` when missing.
    - (Optional) set `OZ_WEBHOOK_SIGNING_KEY` if you consume OZ outbound webhooks outside this app
    - (Recommended) set `OZ_STORAGE_ENCRYPTION_KEY` to your own base64 32-byte key; if omitted, compose uses an insecure default convenience key
    - `DATABASE_PATH` (default under `/data` in Compose)
    - If auth: `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`
-2. Provide **`config/provider.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`).
+2. Provide **`config/provider.json`** using the **minimal** schema: `chains[].chainId`, `forwarderAddress`, non-empty **`rpcUrls`**, `allowedMacros[]` (`domain` + `address`). A tracked starter file is **`config/provider.example.json`** (copy to `config/provider.json` and edit).
 3. Provide OpenZeppelin Relayer config and keystores under **`config/oz-relayer/`** (keys not in git).
 4. Ensure **exactly one** active relayer per configured chain is discoverable via the relayer API at app startup.
 5. `docker compose -f compose.prod.yaml up -d --build` (or `pnpm run stack:prod` from the repo root — same compose file).
@@ -65,7 +66,7 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
 
 Self-contained stack: app + relayer + Redis. Do not horizontally scale multiple app workers against the same SQLite file.
 
-**Compose note:** [compose.prod.yaml](../compose.prod.yaml) runs the **app** service as **`user: "0:0"`** so SQLite can read/write on the Docker **named volume** at `/data` (the runtime image otherwise uses `USER node`, which typically cannot create the DB on a root-owned volume). The OZ relayer container is unchanged.
+**Compose note:** [compose.prod.yaml](../compose.prod.yaml) runs the **app** service as **`user: "0:0"`** so SQLite can read/write on the Docker **named volume** at `/data` (the runtime image otherwise uses `USER node`, which typically cannot create the DB on a root-owned volume). The **`oz-relayer`** service sets **`user: "${OZ_RELAYER_UID}:${OZ_RELAYER_GID}"`** so bind-mounted **`0600`** keystores under `config/oz-relayer/keys/` remain readable (see `.env.example`).
 
 ## Data and backups
 

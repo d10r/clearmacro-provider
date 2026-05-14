@@ -44,6 +44,8 @@ services:
   oz-relayer:
     image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
     restart: unless-stopped
+    # Keystores under ./config/oz-relayer are often mode 0600; run as that host user (see .env.example).
+    user: "${OZ_RELAYER_UID:?set OZ_RELAYER_UID}:${OZ_RELAYER_GID:?set OZ_RELAYER_GID}"
     depends_on:
       - redis
     environment:
