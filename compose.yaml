@@ -23,12 +23,12 @@ services:
       - --block-time
       - "2"
     ports:
-      - "${ANVIL_PORT:-8545}:8545"
+      - "${ANVIL_HOST_PORT:-8545}:8545"
 
   oz-relayer:
     image: openzeppelin/openzeppelin-relayer:${OZ_RELAYER_VERSION:-v1.4.0}
     restart: unless-stopped
-    # Match ownership of bind-mounted ./config/oz-relayer/keys (defaults suit many Linux desktops).
+Enum    # Match ownership of bind-mounted ./config/oz-relayer/keys (defaults suit many Linux desktops).
     user: "${OZ_RELAYER_UID:-1000}:${OZ_RELAYER_GID:-1000}"
     depends_on:
       - redis
@@ -52,8 +52,8 @@ services:
       RATE_LIMIT_BURST_SIZE: "600"
       RELAYER_CONCURRENCY_LIMIT: "200"
     ports:
-      - "${OZ_RELAYER_PORT:-8080}:8080"
-      - "${OZ_RELAYER_METRICS_PORT:-8081}:8081"
+      - "${OZ_RELAYER_HOST_PORT:-8080}:8080"
+      - "${OZ_RELAYER_METRICS_HOST_PORT:-8081}:8081"
     volumes:
       - ./config/oz-relayer:/app/config:ro
 

@@ -256,7 +256,7 @@ Pass the output path as an environment variable or script argument, for example:
 E2E_DEPLOY_OUTPUT=/tmp/.../deploy-output.json forge script \
   --root test/fixtures/contracts \
   script/DeployFullStackE2E.s.sol:DeployFullStackE2E \
-  --rpc-url http://127.0.0.1:${E2E_ANVIL_PORT} \
+  --rpc-url http://127.0.0.1:${E2E_ANVIL_HOST_PORT} \
   --broadcast
 ```
 
@@ -294,7 +294,7 @@ Required services:
 Requirements:
 
 - Chain ID `31337`.
-- Host-published port controlled by `${E2E_ANVIL_PORT}`.
+- Host-published port controlled by `${E2E_ANVIL_HOST_PORT}`.
 - Internal RPC URL: `http://anvil:8545`.
 
 Example command:
@@ -337,7 +337,7 @@ Generated network entry example:
 Requirements:
 
 - Built from this repo's `Dockerfile`.
-- Host-published port controlled by `${E2E_APP_PORT}`.
+- Host-published port controlled by `${E2E_APP_HOST_PORT}`.
 - `PROVIDER_CONFIG_PATH` points to generated provider config mounted read-only.
 - `OZ_RELAYER_URL=http://oz-relayer:8080`.
 - `PROVIDER_NAME=macros.superfluid.eth`.

@@ -1,5 +1,5 @@
 # Full stack for RUN_STACK_E2E=1 (see test/e2e/relay-stack.e2e.test.ts).
-# Vitest sets E2E_ANVIL_PORT, E2E_APP_PORT, E2E_STACK_CONFIG_DIR, E2E_OZ_RELAYER_API_KEY, etc.
+# Vitest sets E2E_ANVIL_HOST_PORT, E2E_APP_HOST_PORT, E2E_STACK_CONFIG_DIR, E2E_OZ_RELAYER_API_KEY, etc.
 
 services:
   anvil:
@@ -20,7 +20,7 @@ services:
       - --gas-limit
       - "120000000"
     ports:
-      - "${E2E_ANVIL_PORT:?E2E_ANVIL_PORT required}:8545"
+      - "${E2E_ANVIL_HOST_PORT:?E2E_ANVIL_HOST_PORT required}:8545"
 
   redis:
     image: redis:7-bookworm
@@ -88,7 +88,7 @@ services:
       API_AUTH_ENABLED: "false"
       LOG_LEVEL: info
     ports:
-      - "${E2E_APP_PORT:?E2E_APP_PORT required}:3000"
+      - "${E2E_APP_HOST_PORT:?E2E_APP_HOST_PORT required}:3000"
     volumes:
       - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/stack:ro
       - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}/data:/stack-data

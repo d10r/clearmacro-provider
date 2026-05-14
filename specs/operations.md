@@ -66,7 +66,7 @@ Contract-backed **preflight** integration tests (`test/integration/preflight-anv
 
 Self-contained stack: app + relayer + Redis. Do not horizontally scale multiple app workers against the same SQLite file.
 
-**Compose note:** [compose.prod.yaml](../compose.prod.yaml) runs the **app** service as **`user: "0:0"`** so SQLite can read/write on the Docker **named volume** at `/data` (the runtime image otherwise uses `USER node`, which typically cannot create the DB on a root-owned volume). The **`oz-relayer`** service sets **`user: "${OZ_RELAYER_UID}:${OZ_RELAYER_GID}"`** so bind-mounted **`0600`** keystores under `config/oz-relayer/keys/` remain readable (see `.env.example`). The app container listens on **`PORT=3000`**; map a different host port with **`CLEARMACRO_PROVIDER_PORT`** (same variable as [compose.dashboard-op-sepolia.yaml](../compose.dashboard-op-sepolia.yaml)).
+**Compose note:** [compose.prod.yaml](../compose.prod.yaml) runs the **app** service as **`user: "0:0"`** so SQLite can read/write on the Docker **named volume** at `/data` (the runtime image otherwise uses `USER node`, which typically cannot create the DB on a root-owned volume). The **`oz-relayer`** service sets **`user: "${OZ_RELAYER_UID}:${OZ_RELAYER_GID}"`** so bind-mounted **`0600`** keystores under `config/oz-relayer/keys/` remain readable (see `.env.example`). The app container listens on **`PORT=3000`**; map a different host port with **`CLEARMACRO_PROVIDER_HOST_PORT`** (same variable as [compose.dashboard-op-sepolia.yaml](../compose.dashboard-op-sepolia.yaml)).
 
 ## Data and backups
 

@@ -105,8 +105,8 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
     } as const;
 
     const composeEnv = (): Record<string, string> => ({
-      E2E_ANVIL_PORT: String(anvilPort),
-      E2E_APP_PORT: String(appPort),
+      E2E_ANVIL_HOST_PORT: String(anvilPort),
+      E2E_APP_HOST_PORT: String(appPort),
       E2E_OZ_HOST_PORT: String(ozHostPort),
       E2E_STACK_CONFIG_DIR: stackDir,
       E2E_OZ_RELAYER_API_KEY: E2E_OZ_API_KEY,

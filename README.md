@@ -108,7 +108,7 @@ pnpm run build
 2. **`config/provider.json`** — start from `config/provider.example.json` (minimal shape), or copy from `config/provider.superfluid-mainnets.json` (or `provider.superfluid-all.json`), then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
-5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. The app always listens on **port 3000 inside the container**; set **`CLEARMACRO_PROVIDER_PORT`** in `.env` to choose the **host** port mapped to it (default `3000`, same name as [`compose.dashboard-op-sepolia.yaml`](compose.dashboard-op-sepolia.yaml)).
+5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. The app always listens on **port 3000 inside the container**; set **`CLEARMACRO_PROVIDER_HOST_PORT`** in `.env` to choose the **host** port mapped to it (default `3000`, same name as [`compose.dashboard-op-sepolia.yaml`](compose.dashboard-op-sepolia.yaml)).
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
 
 Operational notes: keep Redis persistence for the relayer; back up **both** app SQLite and Redis volumes; run **one** app instance per SQLite file (single worker design).
