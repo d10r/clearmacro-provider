@@ -58,7 +58,7 @@ services:
       STORAGE_ENCRYPTION_KEY: ${OZ_STORAGE_ENCRYPTION_KEY:?set OZ_STORAGE_ENCRYPTION_KEY}
       API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
       WEBHOOK_SIGNING_KEY: ${OZ_WEBHOOK_SIGNING_KEY:?set OZ_WEBHOOK_SIGNING_KEY}
-      # OpenZeppelin image accepts passphrase under either name; set both (see compose.dashboard-op-sepolia.yaml).
+      # OpenZeppelin image accepts passphrase under either name; set both to the same value.
       OZ_KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:?set OZ_KEYSTORE_PASSPHRASE}
       KEYSTORE_PASSPHRASE: ${OZ_KEYSTORE_PASSPHRASE:?set OZ_KEYSTORE_PASSPHRASE}
       LOG_LEVEL: ${OZ_LOG_LEVEL:-info}

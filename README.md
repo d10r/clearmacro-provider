@@ -79,8 +79,6 @@ Only chains present in `chains[]` are supported; leave chains you do not relay o
 
 **Minimal starter:** `config/provider.example.json` — copy to `config/provider.json` and replace placeholder RPCs/addresses before `pnpm run prod:init` or first run.
 
-**Dashboard OP Sepolia starter:** `config/provider.dashboard-op-sepolia.example.json` — example allowlist config for the dashboard testnet deployment.
-
 You can generate Superfluid-wide templates from `@superfluid-finance/metadata` with `pnpm run provider:gen:superfluid`. For production traffic, review generated chains, set `macroPolicy`, and replace public `rpcUrls` with your own RPC provider URLs.
 
 ## Local development
@@ -113,7 +111,7 @@ pnpm run build
 2. **`config/provider.json`** — start from `config/provider.example.json` or generate a Superfluid-wide template with `pnpm run provider:gen:superfluid`, then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; fund signers with native gas on every chain.
 4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
-5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. The app always listens on **port 3000 inside the container**; set **`CLEARMACRO_PROVIDER_HOST_PORT`** in `.env` to choose the **host** port mapped to it (default `3000`, same name as [`compose.dashboard-op-sepolia.yaml`](compose.dashboard-op-sepolia.yaml)).
+5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. The app always listens on **port 3000 inside the container**; set **`CLEARMACRO_PROVIDER_HOST_PORT`** in `.env` to choose the **host** port mapped to it (default `3000`; see `compose.prod.yaml`).
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
 
 Operational notes: keep Redis persistence for the relayer; back up **both** app SQLite and Redis volumes; run **one** app instance per SQLite file (single worker design). See [`docs/operations.md`](docs/operations.md) for the deployment checklist and readiness runbook.

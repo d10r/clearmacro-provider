@@ -30,7 +30,6 @@
     "stack:dev:down": "docker compose down",
     "stack:prod": "docker compose -f compose.prod.yaml up -d --build",
     "stack:prod:logs": "docker compose -f compose.prod.yaml logs -f",
-    "prod:prepare:op-sepolia": "bash scripts/prod-prepare-op-sepolia.sh",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
