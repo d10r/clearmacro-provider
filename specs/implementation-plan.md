@@ -102,7 +102,7 @@ Optional:
 
 - `PROVIDER_CONFIG_PATH`: path to provider config JSON file. Default: `config/provider.json`.
 - `HOST`: bind address. Default: `0.0.0.0`.
-- `PORT`: HTTP port. Default: `3000`.
+- `PORT`: HTTP listen port for the Node process. Default: `3000`. In `compose.prod.yaml` the container pins this to `3000`; set `CLEARMACRO_PROVIDER_PORT` for the host port in Compose `ports:` (host → container `3000`; same variable as `compose.dashboard-op-sepolia.yaml`).
 - `LOG_LEVEL`: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. Default: `info`.
 - `RUN_MIGRATIONS_ON_START`: `true` or `false`. Default: `true`.
 - `RELAYER_WORKER_ENABLED`: `true` or `false`. Default: `true`.
