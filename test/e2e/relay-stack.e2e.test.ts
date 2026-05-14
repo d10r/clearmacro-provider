@@ -171,12 +171,20 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
       expect(capRes.ok).toBe(true);
       const caps = (await capRes.json()) as {
         providerName: string;
-        chains: Array<{ chainId: number; forwarderAddress: string }>;
+        chains: Array<{
+          chainId: number;
+          forwarderAddress: string;
+          macroPolicy: { mode: "allowlist"; allowedMacros: Array<{ domain: string; address: string }> };
+        }>;
       };
       expect(caps.providerName).toBe("macros.superfluid.eth");
       expect(caps.chains).toHaveLength(1);
       expect(caps.chains[0]?.chainId).toBe(31337);
       expect(caps.chains[0]?.forwarderAddress.toLowerCase()).toBe(deployed.forwarderAddress.toLowerCase());
+      expect(caps.chains[0]?.macroPolicy).toEqual({
+        mode: "allowlist",
+        allowedMacros: [{ domain: "e2e", address: deployed.macroAddress.toLowerCase() }],
+      });
 
       const salt = randomBytes(32);
       const nonce = await publicClient.readContract({

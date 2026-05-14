@@ -940,11 +940,12 @@ export async function registerRoutes(
         tags: ["Capabilities"],
         summary: "Get provider capabilities",
         description:
-          "Returns the deployment-wide provider name and configured chain forwarders. Dapps should call this before signing so `payload.security.provider` and the ClearMacro forwarder match this provider. Macro policy, readiness, relayer IDs, and relayer status are intentionally not exposed.",
+          "Returns the deployment-wide provider name, configured chain forwarders, and per-chain macro admission policy. Dapps should call this before signing so `payload.security.provider` and the ClearMacro forwarder match this provider. Readiness, relayer IDs, and relayer status are not exposed.",
         response: {
           200: {
             ...CapabilitiesResponseSchema,
-            description: "Provider name and configured chain forwarders.",
+            description:
+              "Provider name, chain forwarders, and macro admission policy (informational; enforcement is on create).",
           },
         },
       },
@@ -954,6 +955,7 @@ export async function registerRoutes(
       chains: deps.registry.raw.chains.map((chain) => ({
         chainId: chain.chainId,
         forwarderAddress: chain.forwarderAddress as `0x${string}`,
+        macroPolicy: chain.macroPolicy,
       })),
     }),
   );

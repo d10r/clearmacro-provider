@@ -322,14 +322,25 @@ describe("API integration", () => {
     expect(response.json<{ error: { code: string } }>().error.code).toBe("EXECUTION_NOT_FOUND");
   });
 
-  it("returns minimal capabilities for dapps", async () => {
+  it("returns capabilities for dapps", async () => {
     const { app } = await createTestHarness();
     const response = await app.inject({ method: "GET", url: "/v1/capabilities" });
     expect(response.statusCode).toBe(200);
-    const body = response.json<{ providerName: string; chains: Array<{ chainId: number; forwarderAddress: string }> }>();
+    const body = response.json<{
+      providerName: string;
+      chains: Array<{
+        chainId: number;
+        forwarderAddress: string;
+        macroPolicy: { mode: "allowlist"; allowedMacros: Array<{ domain: string; address: string }> };
+      }>;
+    }>();
     expect(body.providerName).toBe("macros.superfluid.eth");
     expect(body.chains[0]?.chainId).toBe(1);
     expect(body.chains[0]?.forwarderAddress).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(body.chains[0]?.macroPolicy).toEqual({
+      mode: "allowlist",
+      allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+    });
   });
 
   it("enforces auth token when auth is enabled", async () => {

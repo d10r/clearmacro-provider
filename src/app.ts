@@ -46,7 +46,7 @@ export async function createApp(deps: AppDeps) {
         title: "ClearMacro Provider API",
         version: "0.1.0",
         description:
-          "HTTP API for submitting signed ClearMacro relay executions. Use `GET /v1/capabilities` to discover the configured provider name and forwarders, `POST /v1/relay-executions` to create an execution, then poll the returned execution `id` until it reaches a terminal state.",
+          "HTTP API for submitting signed ClearMacro relay executions. Use `GET /v1/capabilities` to discover the configured provider name, forwarders, and per-chain macro admission policy, `POST /v1/relay-executions` to create an execution, then poll the returned execution `id` until it reaches a terminal state.",
       },
       servers: [
         {

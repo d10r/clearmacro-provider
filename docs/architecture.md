@@ -16,9 +16,8 @@ The public API exposes stable provider execution resources. It intentionally doe
 - Raw OpenZeppelin Relayer statuses or response JSON.
 - Full transaction hash history.
 - Raw payloads, signatures, or internal audit logs.
-- Macro allowlists or whether a chain is in open policy mode.
 
-`GET /v1/capabilities` only returns the deployment `providerName` and configured chain forwarders. Request-time policy remains enforced by `POST /v1/relay-executions`.
+`GET /v1/capabilities` returns the deployment `providerName`, configured chain forwarders, and per-chain `macroPolicy` (same shape as provider config: `allowlist` with `allowedMacros`, or `open`). That response is informational for dapps; request-time policy remains enforced by `POST /v1/relay-executions`.
 
 ## Execution Identity
 

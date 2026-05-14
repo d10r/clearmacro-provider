@@ -65,10 +65,22 @@ describe("E2E relay API", () => {
 
     const cap = await app.inject({ method: "GET", url: "/v1/capabilities" });
     expect(cap.statusCode).toBe(200);
-    const capBody = cap.json<{ providerName: string; chains: Array<{ chainId: number; forwarderAddress: string }> }>();
+    const capBody = cap.json<{
+      providerName: string;
+      chains: Array<{
+        chainId: number;
+        forwarderAddress: string;
+        macroPolicy: { mode: string; allowedMacros?: unknown[] };
+      }>;
+    }>();
     expect(capBody.providerName).toBe("macros.superfluid.eth");
     expect(capBody.chains[0]?.chainId).toBe(1);
     expect(capBody.chains[0]?.forwarderAddress).toMatch(/^0x[0-9a-f]{40}$/);
+    expect(capBody.chains[0]?.macroPolicy?.mode).toBe("allowlist");
+    expect(capBody.chains[0]?.macroPolicy).toMatchObject({
+      mode: "allowlist",
+      allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
+    });
 
     const readyz = await app.inject({ method: "GET", url: "/readyz" });
     expect(readyz.statusCode).toBe(200);

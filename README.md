@@ -22,7 +22,7 @@ Swagger at `/docs` is the API reference for request/response shapes, status code
 | `GET`  | `/healthz`                 | Liveness                                                           |
 | `GET`  | `/readyz`                  | Readiness (per-chain: RPC, relayer, signer balance)                |
 | `GET`  | `/metrics`                 | Prometheus metrics                                                 |
-| `GET`  | `/v1/capabilities`         | Global `providerName` + per-chain `forwarderAddress`               |
+| `GET`  | `/v1/capabilities`         | Global `providerName` + per-chain `forwarderAddress` + `macroPolicy` |
 | `POST` | `/v1/relay-executions`     | Create execution (sync validate + preflight; worker submits later) |
 | `GET`  | `/v1/relay-executions/:id` | Execution resource; `?include=events` for lifecycle events         |
 
@@ -34,7 +34,7 @@ sequenceDiagram
     participant Provider as ClearMacro Provider
     Note over Provider: HTTP API and relayer worker share one process
     Dapp->>Provider: GET /v1/capabilities
-    Provider-->>Dapp: providerName, chain forwarders
+    Provider-->>Dapp: providerName, chain forwarders, macroPolicy
     Note over Dapp: Build ClearMacro payload and sign digest
     Dapp->>Provider: POST /v1/relay-executions
     Provider-->>Dapp: 202 + execution id (or 200 replay)

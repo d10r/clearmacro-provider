@@ -307,6 +307,51 @@ export const RelayExecutionEventsResponseSchema = Type.Intersect([
   }),
 ]);
 
+export const CapabilitiesMacroPolicySchema = Type.Union(
+  [
+    Type.Object(
+      {
+        mode: Type.Literal("allowlist", {
+          description:
+            "Only macros listed in `allowedMacros` are accepted for relay admission on this chain.",
+        }),
+        allowedMacros: Type.Array(
+          Type.Object({
+            domain: Type.String({
+              minLength: 1,
+              description:
+                "Macro domain from the decoded ClearMacro payload; must match exactly for allowlist mode.",
+            }),
+            address: Type.Unsafe<typeof Address>({
+              ...Address,
+              description:
+                "Macro contract address; must match `payload.security.macroContract` for allowlist mode.",
+            }),
+          }),
+          {
+            minItems: 1,
+            description: "Explicit `(domain, address)` pairs this provider relays for the chain.",
+          },
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        mode: Type.Literal("open", {
+          description:
+            "Provider does not enforce a macro allowlist on this chain; relay admission still requires valid payload, signature, readiness, and preflight.",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    description:
+      "Macro admission policy for the chain, mirroring `macroPolicy` in provider config. Informational only; `POST /v1/relay-executions` enforces policy.",
+  },
+);
+
 export const CapabilitiesResponseSchema = Type.Object({
   providerName: Type.String({
     description:
@@ -323,10 +368,14 @@ export const CapabilitiesResponseSchema = Type.Object({
         description:
           "ClearMacro forwarder address dapps should use when constructing payloads for this chain.",
       }),
+      macroPolicy: Type.Unsafe<typeof CapabilitiesMacroPolicySchema>({
+        ...CapabilitiesMacroPolicySchema,
+        description: "Macro admission policy for this chain.",
+      }),
     }),
     {
       description:
-        "Chains configured for this provider. Macro allowlists and relayer internals are intentionally not exposed.",
+        "Chains configured for this provider. Relayer internals and RPC URLs are not exposed.",
     },
   ),
 });
