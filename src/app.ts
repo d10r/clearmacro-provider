@@ -1,7 +1,11 @@
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
-import { registerRoutes, buildBearerResolver, type RegisterRoutesDeps } from "./api/routes.js";
+import {
+  registerRoutes,
+  buildBearerResolver,
+  type RegisterRoutesDeps,
+} from "./api/routes.js";
 import type { LoadedRegistry } from "./config/registry.js";
 import type { AppEnv } from "./config/env.js";
 import {
@@ -38,17 +42,74 @@ export async function createApp(deps: AppDeps) {
 
   await app.register(swagger, {
     openapi: {
-      info: { title: "ClearMacro Provider API", version: "0.1.0" },
+      info: {
+        title: "ClearMacro Provider API",
+        version: "0.1.0",
+        description:
+          "HTTP API for submitting signed ClearMacro relay executions. Use `GET /v1/capabilities` to discover the configured provider name and forwarders, `POST /v1/relay-executions` to create an execution, then poll the returned execution `id` until it reaches a terminal state.",
+      },
+      servers: [
+        {
+          url: "https://clearmacro-provider.superfluid.dev",
+          description: "Production",
+        },
+        {
+          url: "http://localhost:3000",
+          description: "Local development",
+        },
+      ],
+      tags: [
+        {
+          name: "Health",
+          description: "Process and dependency health checks.",
+        },
+        {
+          name: "Relay Executions",
+          description: "ClearMacro relay execution lifecycle.",
+        },
+        {
+          name: "Capabilities",
+          description: "Provider discovery for dapps before signing payloads.",
+        },
+      ],
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            description:
+              "Required when API authentication is enabled for the deployment.",
+          },
+        },
+      },
     },
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
 
-  app.get("/metrics", async (_request, reply) => {
-    reply.header("content-type", metrics.registry.contentType);
-    return metrics.registry.metrics();
-  });
+  app.get(
+    "/metrics",
+    {
+      schema: {
+        tags: ["Health"],
+        summary: "Prometheus metrics",
+        description: "Returns Prometheus-format application metrics.",
+        response: {
+          200: {
+            type: "string",
+            description: "Prometheus exposition format.",
+          },
+        },
+      },
+    },
+    async (_request, reply) => {
+      reply.header("content-type", metrics.registry.contentType);
+      return metrics.registry.metrics();
+    },
+  );
 
-  const bearerResolver = deps.env.apiAuthEnabled ? buildBearerResolver(deps.env.apiClients) : () => null;
+  const bearerResolver = deps.env.apiAuthEnabled
+    ? buildBearerResolver(deps.env.apiClients)
+    : () => null;
 
   await registerRoutes(app, {
     registry: deps.registry,
@@ -66,7 +127,9 @@ export async function createApp(deps: AppDeps) {
     getReadyzChainReadiness: deps.getReadyzChainReadiness,
     getForwarderDigest: deps.getForwarderDigest,
     validateRelaySignature: deps.validateRelaySignature,
-    ...(deps.preflightRunMacro !== undefined ? { preflightRunMacro: deps.preflightRunMacro } : {}),
+    ...(deps.preflightRunMacro !== undefined
+      ? { preflightRunMacro: deps.preflightRunMacro }
+      : {}),
   });
 
   return { app, metrics };

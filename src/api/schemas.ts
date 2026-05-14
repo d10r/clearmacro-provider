@@ -1,111 +1,364 @@
 import { Type } from "@sinclair/typebox";
 
-const Address = Type.String({ pattern: "^0x[0-9a-fA-F]{40}$" });
-const Bytes = Type.String({ pattern: "^0x([0-9a-fA-F]{2})*$" });
-const UintString = Type.String({ pattern: "^[0-9]+$" });
-const Bytes32 = Type.String({ pattern: "^0x[0-9a-fA-F]{64}$" });
-
-export const CreateRelayExecutionRequestSchema = Type.Object({
-  kind: Type.Literal("clearMacroV1"),
-  chainId: Type.Integer({ minimum: 1 }),
-  macroAddress: Address,
-  signerAddress: Address,
-  payload: Bytes,
-  signature: Bytes,
-  value: Type.Optional(UintString),
-  forceExecuteAfterPreflightRevert: Type.Optional(Type.Boolean()),
-  clientRequestId: Type.Optional(Type.String()),
-  metadata: Type.Optional(Type.Record(Type.String(), Type.String())),
+const Address = Type.String({
+  pattern: "^0x[0-9a-fA-F]{40}$",
+  description: "EVM address.",
+});
+const Bytes = Type.String({
+  pattern: "^0x([0-9a-fA-F]{2})*$",
+  description: "Hex-encoded bytes.",
+});
+const UintString = Type.String({
+  pattern: "^[0-9]+$",
+  description: "Unsigned integer encoded as a base-10 string.",
+});
+const Bytes32 = Type.String({
+  pattern: "^0x[0-9a-fA-F]{64}$",
+  description: "32-byte hex value.",
 });
 
+export const HealthzResponseSchema = Type.Object({
+  ok: Type.Boolean({ description: "True when the HTTP process is running." }),
+});
+
+export const ReadyzResponseSchema = Type.Object({
+  ready: Type.Boolean({
+    description:
+      "True when every configured chain is ready for relay execution creation.",
+  }),
+  chains: Type.Array(
+    Type.Object({
+      chainId: Type.Integer({
+        minimum: 1,
+        description: "Configured EVM chain ID.",
+      }),
+      ready: Type.Boolean({ description: "Whether this chain is ready." }),
+      reasonCode: Type.Union(
+        [
+          Type.Literal("PROVIDER_NOT_READY"),
+          Type.Literal("RELAYER_UNAVAILABLE"),
+          Type.Literal("RELAYER_RATE_LIMITED"),
+          Type.Null(),
+        ],
+        {
+          description:
+            "Machine-readable reason when this chain is not ready, or null when ready.",
+        },
+      ),
+    }),
+  ),
+});
+
+export const CreateRelayExecutionRequestSchema = Type.Object(
+  {
+    kind: Type.Literal("clearMacroV1", {
+      description: "Relay kind supported by this API version.",
+    }),
+    chainId: Type.Integer({
+      minimum: 1,
+      description:
+        "EVM chain ID for the ClearMacro payload and configured provider forwarder.",
+    }),
+    macroAddress: Type.Unsafe<typeof Address>({
+      ...Address,
+      description:
+        "ClearMacro contract address. Must match `payload.security.macroContract` after decoding.",
+    }),
+    signerAddress: Type.Unsafe<typeof Address>({
+      ...Address,
+      description:
+        "Address that signed the resolved forwarder digest. EOAs and ERC-1271 contract signers are supported.",
+    }),
+    payload: Type.Unsafe<typeof Bytes>({
+      ...Bytes,
+      description:
+        "ABI-encoded ClearMacro payload. The provider decodes it to validate macro contract, provider name, domain, nonce, and validity window.",
+    }),
+    signature: Type.Unsafe<typeof Bytes>({
+      ...Bytes,
+      description:
+        "Signature over `ClearMacroForwarderV1.getDigest(macroAddress, payload)`.",
+    }),
+    value: Type.Optional(
+      Type.Unsafe<typeof UintString>({
+        ...UintString,
+        description:
+          "Native token value to pass to `runMacro`; defaults to `0` when omitted.",
+      }),
+    ),
+    forceExecuteAfterPreflightRevert: Type.Optional(
+      Type.Boolean({
+        description:
+          "When true, a deterministic preflight revert can still create a pending execution. This does not bypass auth, policy, signature, validity, readiness, or payload validation.",
+      }),
+    ),
+    clientRequestId: Type.Optional(
+      Type.String({
+        description:
+          "Optional dapp correlation ID. It is echoed on the execution resource but is not used for deduplication.",
+      }),
+    ),
+    metadata: Type.Optional(
+      Type.Record(Type.String(), Type.String(), {
+        description:
+          "Optional dapp-provided correlation data. Do not include secrets.",
+      }),
+    ),
+  },
+  {
+    examples: [
+      {
+        kind: "clearMacroV1",
+        chainId: 11155420,
+        macroAddress: "0x1111111111111111111111111111111111111111",
+        signerAddress: "0x2222222222222222222222222222222222222222",
+        payload: "0x1234",
+        signature: "0xabcdef",
+        value: "0",
+        clientRequestId: "dashboard-transaction-123",
+        metadata: { source: "dashboard" },
+      },
+    ],
+  },
+);
+
 const RelayExecutionErrorSchema = Type.Object({
-  code: Type.String(),
-  message: Type.String(),
-  category: Type.Union([
-    Type.Literal("user"),
-    Type.Literal("provider"),
-    Type.Literal("chain"),
-    Type.Literal("relayer"),
-    Type.Literal("unknown"),
-  ]),
-  retryable: Type.Boolean(),
+  code: Type.String({ description: "Machine-readable error code." }),
+  message: Type.String({ description: "Human-readable error summary." }),
+  category: Type.Union(
+    [
+      Type.Literal("user"),
+      Type.Literal("provider"),
+      Type.Literal("chain"),
+      Type.Literal("relayer"),
+      Type.Literal("unknown"),
+    ],
+    { description: "Error source category." },
+  ),
+  retryable: Type.Boolean({
+    description: "Whether retrying the same request may succeed.",
+  }),
 });
 
 const RelayExecutionReceiptSchema = Type.Object({
   transactionHash: Bytes32,
-  blockNumber: UintString,
+  blockNumber: Type.Unsafe<typeof UintString>({
+    ...UintString,
+    description:
+      "Block number containing the transaction, as a decimal string.",
+  }),
   blockHash: Type.Optional(Bytes32),
-  status: Type.Union([Type.Literal("success"), Type.Literal("reverted")]),
-  gasUsed: Type.Optional(UintString),
+  status: Type.Union([Type.Literal("success"), Type.Literal("reverted")], {
+    description: "Normalized onchain receipt outcome.",
+  }),
+  gasUsed: Type.Optional(
+    Type.Unsafe<typeof UintString>({
+      ...UintString,
+      description: "Gas used by the transaction, as a decimal string.",
+    }),
+  ),
 });
 
 const RelayExecutionTransactionSchema = Type.Object({
-  hash: Bytes32,
+  hash: Type.Unsafe<typeof Bytes32>({
+    ...Bytes32,
+    description:
+      "Current EVM transaction hash. This may change before the execution is terminal.",
+  }),
   from: Type.Optional(Address),
-  to: Address,
-  submittedAt: Type.Optional(Type.String()),
+  to: Type.Unsafe<typeof Address>({
+    ...Address,
+    description: "Resolved ClearMacro forwarder address.",
+  }),
+  submittedAt: Type.Optional(
+    Type.String({ description: "Relayer submission timestamp when known." }),
+  ),
 });
 
-export const RelayExecutionResponseSchema = Type.Object({
-  id: Type.String(),
-  state: Type.String(),
-  terminal: Type.Boolean(),
-  kind: Type.Literal("clearMacroV1"),
-  chainId: Type.Integer({ minimum: 1 }),
-  clientRequestId: Type.Optional(Type.String()),
-  metadata: Type.Record(Type.String(), Type.String()),
-  forwarderAddress: Address,
-  macroAddress: Address,
-  signerAddress: Address,
-  nonce: UintString,
-  validity: Type.Object({
-    validAfter: UintString,
-    validBefore: UintString,
-  }),
-  value: UintString,
-  transaction: Type.Optional(RelayExecutionTransactionSchema),
-  receipt: Type.Optional(RelayExecutionReceiptSchema),
-  error: Type.Optional(RelayExecutionErrorSchema),
-  timestamps: Type.Object({
-    createdAt: Type.String(),
-    updatedAt: Type.String(),
-    terminalAt: Type.Optional(Type.String()),
-  }),
-  links: Type.Object({
-    self: Type.String(),
-  }),
-});
+const RelayExecutionStateSchema = Type.Union(
+  [
+    Type.Literal("pending"),
+    Type.Literal("submitted"),
+    Type.Literal("succeeded"),
+    Type.Literal("reverted"),
+    Type.Literal("rejected"),
+    Type.Literal("failed"),
+    Type.Literal("expired"),
+    Type.Literal("canceled"),
+  ],
+  {
+    description:
+      "`pending` means accepted but no current transaction hash is known. `submitted` means a current transaction hash is known. `succeeded`, `reverted`, `rejected`, `failed`, `expired`, and `canceled` are terminal.",
+  },
+);
+
+export const RelayExecutionResponseSchema = Type.Object(
+  {
+    id: Type.String({
+      description:
+        "Stable provider execution ID. Dapps should track this ID rather than the EVM transaction hash.",
+    }),
+    state: RelayExecutionStateSchema,
+    terminal: Type.Boolean({
+      description: "True when the execution has reached a final public state.",
+    }),
+    kind: Type.Literal("clearMacroV1", { description: "Relay kind." }),
+    chainId: Type.Integer({ minimum: 1, description: "EVM chain ID." }),
+    clientRequestId: Type.Optional(
+      Type.String({
+        description:
+          "Dapp correlation ID from the create request, when provided.",
+      }),
+    ),
+    metadata: Type.Record(Type.String(), Type.String(), {
+      description: "Dapp-provided metadata echoed from the create request.",
+    }),
+    forwarderAddress: Type.Unsafe<typeof Address>({
+      ...Address,
+      description: "Provider-resolved ClearMacro forwarder for this chain.",
+    }),
+    macroAddress: Type.Unsafe<typeof Address>({
+      ...Address,
+      description:
+        "ClearMacro contract address from the request and decoded payload.",
+    }),
+    signerAddress: Type.Unsafe<typeof Address>({
+      ...Address,
+      description: "Address that signed the relay digest.",
+    }),
+    nonce: Type.Unsafe<typeof UintString>({
+      ...UintString,
+      description: "Decoded ClearMacro nonce, as a decimal string.",
+    }),
+    validity: Type.Object({
+      validAfter: Type.Unsafe<typeof UintString>({
+        ...UintString,
+        description:
+          "Earliest accepted timestamp from the ClearMacro payload, as Unix seconds.",
+      }),
+      validBefore: Type.Unsafe<typeof UintString>({
+        ...UintString,
+        description:
+          "Latest accepted timestamp from the ClearMacro payload, as Unix seconds. `0` means no upper bound.",
+      }),
+    }),
+    value: Type.Unsafe<typeof UintString>({
+      ...UintString,
+      description:
+        "Native token value sent with the relay transaction, as a decimal string.",
+    }),
+    transaction: Type.Optional(RelayExecutionTransactionSchema),
+    receipt: Type.Optional(RelayExecutionReceiptSchema),
+    error: Type.Optional(RelayExecutionErrorSchema),
+    timestamps: Type.Object({
+      createdAt: Type.String({ description: "Execution creation timestamp." }),
+      updatedAt: Type.String({
+        description: "Last execution update timestamp.",
+      }),
+      terminalAt: Type.Optional(
+        Type.String({
+          description: "Terminal transition timestamp, when terminal.",
+        }),
+      ),
+    }),
+    links: Type.Object({
+      self: Type.String({
+        description: "Relative URL for this execution resource.",
+      }),
+    }),
+  },
+  {
+    examples: [
+      {
+        id: "018f4f2d-8f5b-7c48-9b4a-cd9d4f2b8a01",
+        state: "pending",
+        terminal: false,
+        kind: "clearMacroV1",
+        chainId: 11155420,
+        clientRequestId: "dashboard-transaction-123",
+        metadata: { source: "dashboard" },
+        forwarderAddress: "0x3333333333333333333333333333333333333333",
+        macroAddress: "0x1111111111111111111111111111111111111111",
+        signerAddress: "0x2222222222222222222222222222222222222222",
+        nonce: "1",
+        validity: { validAfter: "0", validBefore: "0" },
+        value: "0",
+        timestamps: {
+          createdAt: "2026-05-14T17:00:00.000Z",
+          updatedAt: "2026-05-14T17:00:00.000Z",
+        },
+        links: {
+          self: "/v1/relay-executions/018f4f2d-8f5b-7c48-9b4a-cd9d4f2b8a01",
+        },
+      },
+    ],
+  },
+);
 
 export const RelayExecutionEventsResponseSchema = Type.Intersect([
   RelayExecutionResponseSchema,
-  Type.Object({ events: Type.Optional(Type.Array(Type.Any())) }),
+  Type.Object({
+    events: Type.Optional(
+      Type.Array(Type.Any(), {
+        description:
+          "Sanitized lifecycle events. Present only when `include=events` is requested.",
+      }),
+    ),
+  }),
 ]);
 
 export const CapabilitiesResponseSchema = Type.Object({
-  providerName: Type.String(),
+  providerName: Type.String({
+    description:
+      "Deployment-wide provider name that dapps must encode into `payload.security.provider`.",
+  }),
   chains: Type.Array(
     Type.Object({
-      chainId: Type.Integer({ minimum: 1 }),
-      forwarderAddress: Address,
+      chainId: Type.Integer({
+        minimum: 1,
+        description: "Configured EVM chain ID.",
+      }),
+      forwarderAddress: Type.Unsafe<typeof Address>({
+        ...Address,
+        description:
+          "ClearMacro forwarder address dapps should use when constructing payloads for this chain.",
+      }),
     }),
+    {
+      description:
+        "Chains configured for this provider. Macro allowlists and relayer internals are intentionally not exposed.",
+    },
   ),
 });
 
 export const ErrorBodySchema = Type.Object({
   error: Type.Object({
-    code: Type.String(),
-    message: Type.String(),
-    category: Type.Union([
-      Type.Literal("user"),
-      Type.Literal("provider"),
-      Type.Literal("chain"),
-      Type.Literal("relayer"),
-      Type.Literal("auth"),
-      Type.Literal("validation"),
-      Type.Literal("unknown"),
-    ]),
-    retryable: Type.Boolean(),
-    executionId: Type.Union([Type.String(), Type.Null()]),
-    details: Type.Record(Type.String(), Type.Any()),
+    code: Type.String({
+      description:
+        "Machine-readable error code such as `VALIDATION_ERROR`, `UNAUTHORIZED`, `CHAIN_NOT_ALLOWED`, `MACRO_NOT_ALLOWED`, `PROVIDER_NOT_ALLOWED`, `DUPLICATE_EXECUTION`, `INVALID_CLEAR_MACRO_PAYLOAD`, `CLEAR_MACRO_EXPIRED`, `CLEAR_MACRO_NOT_YET_VALID`, `SIGNATURE_INVALID`, `PREFLIGHT_REVERTED`, `PROVIDER_NOT_READY`, `RELAYER_UNAVAILABLE`, `RELAYER_RATE_LIMITED`, or `CHAIN_UNAVAILABLE`.",
+    }),
+    message: Type.String({ description: "Human-readable error summary." }),
+    category: Type.Union(
+      [
+        Type.Literal("user"),
+        Type.Literal("provider"),
+        Type.Literal("chain"),
+        Type.Literal("relayer"),
+        Type.Literal("auth"),
+        Type.Literal("validation"),
+        Type.Literal("unknown"),
+      ],
+      { description: "Error source category." },
+    ),
+    retryable: Type.Boolean({
+      description: "Whether retrying the same request may succeed.",
+    }),
+    executionId: Type.Union([Type.String(), Type.Null()], {
+      description:
+        "Execution ID when one can be safely returned, otherwise null.",
+    }),
+    details: Type.Record(Type.String(), Type.Any(), {
+      description: "Additional structured error details when available.",
+    }),
   }),
 });
