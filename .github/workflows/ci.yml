@@ -15,10 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: superfluid-finance/protocol-monorepo
-          path: ../protocol-monorepo
+          path: protocol-monorepo
           sparse-checkout: |
             packages/ethereum-contracts
             packages/solidity-semantic-money
+
+      - name: Link protocol-monorepo for Foundry remappings
+        run: ln -s "$GITHUB_WORKSPACE/protocol-monorepo" "$GITHUB_WORKSPACE/../protocol-monorepo"
 
       - uses: pnpm/action-setup@v4
         with:
