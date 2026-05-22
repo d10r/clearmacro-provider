@@ -9,7 +9,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { preflightRunMacro } from "../../src/chain/readiness.js";
-import fixtureArtifact from "../../out/RelayerLikePreflightForwarder.sol/RelayerLikePreflightForwarder.json" with { type: "json" };
+import fixtureArtifact from "../fixtures/contracts/out/RelayerLikePreflightForwarder.sol/RelayerLikePreflightForwarder.json" with { type: "json" };
 
 const rpcUrl = "http://127.0.0.1:18545";
 const chain = {
