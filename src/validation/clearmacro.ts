@@ -1,8 +1,9 @@
 import { decodeAbiParameters, recoverAddress } from "viem";
 
+/** ABI tuple for `abi.encode(IClearMacroForwarderV1.Payload)`. */
 export const clearMacroPayloadAbiParameters = [
   {
-    name: "payload",
+    name: "Payload",
     type: "tuple",
     components: [
       {
@@ -35,8 +36,11 @@ export type DecodedPayload = {
   nonce: bigint;
 };
 
-export function decodeClearMacroPayload(params: string): DecodedPayload {
-  const [payload] = decodeAbiParameters(clearMacroPayloadAbiParameters, params as `0x${string}`);
+export function decodeClearMacroPayload(encodedPayload: string): DecodedPayload {
+  const [payload] = decodeAbiParameters(
+    clearMacroPayloadAbiParameters,
+    encodedPayload as `0x${string}`,
+  );
   return {
     domain: payload.security.domain,
     macroContract: payload.security.macroContract.toLowerCase(),

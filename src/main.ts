@@ -66,7 +66,7 @@ async function main(): Promise<void> {
         chainId: input.chainId,
         forwarder: input.forwarder,
         macro: input.macro,
-        params: input.params,
+        encodedPayload: input.encodedPayload,
       }),
     validateRelaySignature: (input) =>
       validateRelaySignature({

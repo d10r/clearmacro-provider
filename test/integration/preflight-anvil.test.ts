@@ -66,7 +66,7 @@ describe("preflight contract-backed integration", () => {
     const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account: relayerSigner });
 
     const macro = "0x00000000000000000000000000000000000000aa" as Address;
-    const params = "0x1234";
+    const encodedPayload = "0x1234";
     const signature = "0x1234";
     const msgValue = 0n;
 
@@ -88,7 +88,7 @@ describe("preflight contract-backed integration", () => {
       },
       forwarder,
       macro,
-      params,
+      encodedPayload,
       signer: requestSigner.address,
       relayerSigner: relayerSigner.address,
       signature,
@@ -105,7 +105,7 @@ describe("preflight contract-backed integration", () => {
       },
       forwarder,
       macro,
-      params,
+      encodedPayload,
       signer: requestSigner.address,
       relayerSigner: relayerSigner.address,
       signature: "0x9999",
@@ -119,7 +119,7 @@ describe("preflight contract-backed integration", () => {
         address: forwarder,
         abi: fixtureArtifact.abi,
         functionName: "runMacro",
-        args: [macro, params as `0x${string}`, requestSigner.address, signature as `0x${string}`],
+        args: [macro, encodedPayload as `0x${string}`, requestSigner.address, signature as `0x${string}`],
         value: msgValue,
         account: other.address,
       }),

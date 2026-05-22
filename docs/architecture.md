@@ -77,7 +77,7 @@ Deduplication is based on the exact signed authorization intent:
 (chainId, forwarderAddress, signerAddress, digest)
 ```
 
-The digest is read from `ClearMacroForwarderV1.getDigest(macroAddress, payload)`. Deduplication is a retry and UX feature, not replay protection; onchain replay protection remains the forwarder's responsibility.
+The digest is read from `ClearMacroForwarderV1.getDigest(m, encodedPayload)` onchain; the provider passes `macro` (from request `macroAddress`) and ABI-encoded `payload` (`IClearMacroForwarderV1.Payload`). Deduplication is a retry and UX feature, not replay protection; onchain replay protection remains the forwarder's responsibility.
 
 Important invariant: duplicate replay must not become an authorization bypass. A caller should only receive an existing execution when the request is otherwise valid and the execution is visible to that caller. With auth enabled, visibility means the same resolved `client_id`; a different `client_id` gets `409 DUPLICATE_EXECUTION` without leaking the existing execution ID. With auth disabled, all callers are `anonymous`, so exact duplicate replays return the existing execution.
 
@@ -85,7 +85,7 @@ Important invariant: duplicate replay must not become an authorization bypass. A
 
 Every configured chain uses an explicit `macroPolicy`:
 
-- `allowlist`: require an exact decoded `(domain, macroAddress)` match in `allowedMacros`.
+- `allowlist`: require an exact decoded `(domain, macroAddress)` match in `allowedMacros[].address`.
 - `open`: skip allowlist membership only.
 
 Open mode still validates chain config, resolved forwarder, request/payload macro consistency, provider name, digest, signature, readiness, and preflight. Empty `allowedMacros` must not mean open mode.

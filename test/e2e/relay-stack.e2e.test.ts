@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, createPublicClient, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { clearMacroForwarderV1Abi } from "../../src/tx/builder.js";
+import { clearMacroForwarderV1Abi } from "../../src/chain/clearMacroForwarderV1Abi.js";
 import { clearMacroPayloadAbiParameters } from "../../src/validation/clearmacro.js";
 import {
   allocateHostPort,

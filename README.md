@@ -81,6 +81,17 @@ Only chains present in `chains[]` are supported; leave chains you do not relay o
 
 You can generate Superfluid-wide templates from `@superfluid-finance/metadata` with `pnpm run provider:gen:superfluid`. For production traffic, review generated chains, set `macroPolicy`, and replace public `rpcUrls` with your own RPC provider URLs.
 
+## Forwarder ABI
+
+On-chain calls use a **vendored** `ClearMacroForwarderV1` ABI at `src/chain/clearMacroForwarderV1.abi.ts` (no runtime dependency on `@superfluid-finance/ethereum-contracts`). After the forwarder changes in protocol-monorepo, regenerate from a local build:
+
+```bash
+# in protocol-monorepo/packages/ethereum-contracts: yarn build
+PROTOCOL_MONOREPO=../protocol-monorepo pnpm run abi:sync:clear-macro-forwarder
+```
+
+When `ethereum-contracts` publishes a release that includes ClearMacro, you can switch to `import … from "@superfluid-finance/ethereum-contracts/build/bundled-abi.json"` instead of vendoring.
+
 ## Local development
 
 ```bash

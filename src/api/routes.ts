@@ -26,6 +26,8 @@ import { hashCanonicalCreateBody } from "./canonicalBody.js";
 import {
   preflightRunMacro,
   type ChainReadinessResult,
+  type ClearMacroForwarderCall,
+  type ClearMacroForwarderPayload,
 } from "../chain/readiness.js";
 import type { RegistryChain } from "../config/schema.js";
 
@@ -43,12 +45,9 @@ export type RegisterRoutesDeps = {
   requestMaxMetadataValueLength: number;
   getChainReadiness: (chainId: number) => Promise<ChainReadinessResult>;
   getReadyzChainReadiness: (chainId: number) => Promise<ChainReadinessResult>;
-  getForwarderDigest: (input: {
-    chainId: number;
-    forwarder: string;
-    macro: string;
-    params: string;
-  }) => Promise<string>;
+  getForwarderDigest: (
+    input: ClearMacroForwarderPayload & { chainId: number },
+  ) => Promise<string>;
   validateRelaySignature: (input: {
     chainId: number;
     signer: string;
@@ -56,16 +55,14 @@ export type RegisterRoutesDeps = {
     signature: string;
   }) => Promise<boolean>;
   /** Test override hook; defaults to real `preflightRunMacro`. */
-  preflightRunMacro?: (input: {
-    chain: RegistryChain;
-    forwarder: string;
-    macro: string;
-    params: string;
-    signer: string;
-    relayerSigner: string;
-    signature: string;
-    msgValue: string;
-  }) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
+  preflightRunMacro?: (
+    input: ClearMacroForwarderCall & {
+      chain: RegistryChain;
+      relayerSigner: string;
+      signature: string;
+      msgValue: string;
+    },
+  ) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
 };
 
 function sha256(value: string): string {
@@ -561,7 +558,7 @@ export async function registerRoutes(
           chainId: body.chainId,
           forwarder: forwarderAddress,
           macro: body.macroAddress.toLowerCase(),
-          params: body.payload,
+          encodedPayload: body.payload,
         });
       } catch {
         deps.createRequestAudit.append({
@@ -696,7 +693,7 @@ export async function registerRoutes(
         chain: chainConfig,
         forwarder: forwarderAddress,
         macro: body.macroAddress.toLowerCase(),
-        params: body.payload,
+        encodedPayload: body.payload,
         signer: body.signerAddress.toLowerCase(),
         relayerSigner,
         signature: body.signature,

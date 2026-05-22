@@ -72,12 +72,12 @@ export const CreateRelayExecutionRequestSchema = Type.Object(
     payload: Type.Unsafe<typeof Bytes>({
       ...Bytes,
       description:
-        "ABI-encoded ClearMacro payload. The provider decodes it to validate macro contract, provider name, domain, nonce, and validity window.",
+        "ABI-encoded `IClearMacroForwarderV1.Payload` (`encodedPayload` onchain). The provider decodes it to validate macro contract, provider name, domain, nonce, and validity window.",
     }),
     signature: Type.Unsafe<typeof Bytes>({
       ...Bytes,
       description:
-        "Signature over `ClearMacroForwarderV1.getDigest(macroAddress, payload)`.",
+        "Signature over `ClearMacroForwarderV1.getDigest(m, encodedPayload)`; request `macroAddress` is the macro contract (`m`).",
     }),
     value: Type.Optional(
       Type.Unsafe<typeof UintString>({

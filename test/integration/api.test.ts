@@ -60,7 +60,8 @@ describe("API integration", () => {
 
   it("allows different payloads that share a nonce when digests differ", async () => {
     const { app } = await createTestHarness({
-      getForwarderDigest: async (input) => `0x${createHash("sha256").update(input.params).digest("hex")}`,
+      getForwarderDigest: async (input) =>
+        `0x${createHash("sha256").update(input.encodedPayload).digest("hex")}`,
     });
     const first = await buildRelayPayload();
     const second = await buildRelayPayload({

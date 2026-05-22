@@ -1,6 +1,9 @@
 import type { LoadedRegistry } from "../config/registry.js";
 
-export function assertMacroAllowed(registry: LoadedRegistry, input: { chainId: number; domain: string; macroAddress: string }): { ok: true } | { ok: false; code: string; message: string } {
+export function assertMacroAllowed(
+  registry: LoadedRegistry,
+  input: { chainId: number; domain: string; macroAddress: string },
+): { ok: true } | { ok: false; code: string; message: string } {
   const chain = registry.chainsById.get(input.chainId);
   if (!chain) {
     return { ok: false, code: "CHAIN_NOT_ALLOWED", message: "Unsupported chain." };

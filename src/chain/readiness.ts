@@ -3,7 +3,7 @@ import type { LoadedRegistry } from "../config/registry.js";
 import type { RegistryChain } from "../config/schema.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import { OzRelayerRateLimitError } from "../relayer/errors.js";
-import { clearMacroForwarderV1Abi } from "../tx/builder.js";
+import { clearMacroForwarderV1Abi } from "./clearMacroForwarderV1Abi.js";
 import { validateEoaSignature } from "../validation/clearmacro.js";
 
 const erc1271Abi = [
@@ -63,13 +63,24 @@ export async function withRpcFallback<T>(chain: RegistryChain, fn: (client: Publ
   throw lastError ?? new Error("No RPC endpoints configured");
 }
 
-export async function getForwarderDigest(input: {
-  registry: LoadedRegistry;
-  chainId: number;
+/** Shared forwarder/macro/payload triple (HTTP: `forwarderAddress`, `macroAddress`, `payload`). */
+export type ClearMacroForwarderPayload = {
   forwarder: string;
   macro: string;
-  params: string;
-}): Promise<string> {
+  encodedPayload: string;
+};
+
+/** Args for `runMacro` / preflight (adds `signer`). */
+export type ClearMacroForwarderCall = ClearMacroForwarderPayload & {
+  signer: string;
+};
+
+export async function getForwarderDigest(
+  input: ClearMacroForwarderPayload & {
+    registry: LoadedRegistry;
+    chainId: number;
+  },
+): Promise<string> {
   const chain = input.registry.chainsById.get(input.chainId);
   if (!chain) {
     throw new Error("Chain not found");
@@ -79,7 +90,7 @@ export async function getForwarderDigest(input: {
       address: input.forwarder as `0x${string}`,
       abi: clearMacroForwarderV1Abi,
       functionName: "getDigest",
-      args: [input.macro as `0x${string}`, input.params as `0x${string}`],
+      args: [input.macro as `0x${string}`, input.encodedPayload as `0x${string}`],
     });
     return digest;
   });
@@ -136,23 +147,26 @@ function classifyOzReadinessFailure(error: unknown): ChainReadinessReasonCode {
   return "RELAYER_UNAVAILABLE";
 }
 
-export async function preflightRunMacro(input: {
-  chain: RegistryChain;
-  forwarder: string;
-  macro: string;
-  params: string;
-  signer: string;
-  relayerSigner: string;
-  signature: string;
-  msgValue: string;
-}): Promise<"ok" | "deterministic_revert" | "rpc_unavailable"> {
+export async function preflightRunMacro(
+  input: ClearMacroForwarderCall & {
+    chain: RegistryChain;
+    relayerSigner: string;
+    signature: string;
+    msgValue: string;
+  },
+): Promise<"ok" | "deterministic_revert" | "rpc_unavailable"> {
   try {
     await withRpcFallback(input.chain, async (client) => {
       await client.simulateContract({
         address: input.forwarder as `0x${string}`,
         abi: clearMacroForwarderV1Abi,
         functionName: "runMacro",
-        args: [input.macro as `0x${string}`, input.params as `0x${string}`, input.signer as `0x${string}`, input.signature as `0x${string}`],
+        args: [
+          input.macro as `0x${string}`,
+          input.encodedPayload as `0x${string}`,
+          input.signer as `0x${string}`,
+          input.signature as `0x${string}`,
+        ],
         account: input.relayerSigner as `0x${string}`,
         value: BigInt(input.msgValue),
       });

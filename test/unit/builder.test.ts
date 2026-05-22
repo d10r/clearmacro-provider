@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildRunMacroCalldata, clearMacroForwarderV1Abi } from "../../src/tx/builder.js";
+import { clearMacroForwarderV1Abi } from "../../src/chain/clearMacroForwarderV1Abi.js";
+import { buildRunMacroCalldata } from "../../src/tx/builder.js";
 import { decodeFunctionData } from "viem";
 
 describe("buildRunMacroCalldata", () => {
-  it("encodes runMacro with macro, params, signer, signature", () => {
+  it("encodes runMacro with macro, encodedPayload, signer, signature", () => {
     const data = buildRunMacroCalldata({
       macro: "0x00000000000000000000000000000000000000aa",
-      params: "0xabcd",
+      encodedPayload: "0xabcd",
       signer: "0x00000000000000000000000000000000000000bb",
       signature: "0xdeadbeef",
     });

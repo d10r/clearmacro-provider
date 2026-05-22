@@ -8,7 +8,7 @@ import { OzRelayerHttpError, OzRelayerRateLimitError } from "./errors.js";
 import { projectRelayerState } from "./mapper.js";
 import { buildRunMacroCalldata } from "../tx/builder.js";
 import type { LoadedRegistry } from "../config/registry.js";
-import { preflightRunMacro } from "../chain/readiness.js";
+import { preflightRunMacro, type ClearMacroForwarderCall } from "../chain/readiness.js";
 import type { RelayExecutionReceipt } from "../db/repositories.js";
 import { normalizeOzReceipt, type RawOzReceipt } from "./receiptNormalize.js";
 
@@ -22,16 +22,14 @@ export type RelayerWorkerDeps = {
   submitRetryCount?: number;
   /** When set, poll loop backs off across ticks after OZ HTTP 429. */
   ozPollBackoff?: { until: number };
-  preflightSimulation?: (input: {
-    chain: LoadedRegistry["raw"]["chains"][number];
-    forwarder: string;
-    macro: string;
-    params: string;
-    signer: string;
-    relayerSigner: string;
-    signature: string;
-    msgValue: string;
-  }) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
+  preflightSimulation?: (
+    input: ClearMacroForwarderCall & {
+      chain: LoadedRegistry["raw"]["chains"][number];
+      relayerSigner: string;
+      signature: string;
+      msgValue: string;
+    },
+  ) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
 };
 
 function isTransientSubmitError(error: unknown): boolean {
@@ -100,7 +98,7 @@ export async function processRelayerWorkerTick(
           chain,
           forwarder: execution.forwarderAddress,
           macro: execution.macroAddress,
-          params: execution.payload,
+          encodedPayload: execution.payload,
           signer: execution.signerAddress,
           relayerSigner: relayer.address,
           signature: execution.signature,
@@ -165,7 +163,7 @@ export async function processRelayerWorkerTick(
           value: execution.value,
           data: buildRunMacroCalldata({
             macro: execution.macroAddress,
-            params: execution.payload,
+            encodedPayload: execution.payload,
             signer: execution.signerAddress,
             signature: execution.signature,
           }),

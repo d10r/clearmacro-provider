@@ -248,7 +248,7 @@ describe("relayer worker", () => {
         payload: "0x9999",
       }),
     );
-    const preflightCalls: Array<{ signer: string; signature: string; params: string }> = [];
+    const preflightCalls: Array<{ signer: string; signature: string; encodedPayload: string }> = [];
     const relayerClient = {
       getRelayer: async () => ({
         address: "0x0000000000000000000000000000000000000010",
@@ -289,7 +289,11 @@ describe("relayer worker", () => {
       registry,
       batchSize: 10,
       preflightSimulation: async (input) => {
-        preflightCalls.push({ signer: input.signer, signature: input.signature, params: input.params });
+        preflightCalls.push({
+          signer: input.signer,
+          signature: input.signature,
+          encodedPayload: input.encodedPayload,
+        });
         return "ok";
       },
     });
@@ -298,7 +302,7 @@ describe("relayer worker", () => {
     expect(preflightCalls[0]).toEqual({
       signer: "0x00000000000000000000000000000000000000aa",
       signature: "0xbeef",
-      params: "0x9999",
+      encodedPayload: "0x9999",
     });
     expect(executions.getByIdOrThrow(created.id).state).toBe("submitted");
   });
