@@ -94,7 +94,7 @@ describe("API integration", () => {
   it("GET /readyz uses cached readiness while POST uses uncached readiness", async () => {
     let readyzInnerCalls = 0;
     let relayReadinessCalls = 0;
-    const inner = async (_chainId: number) => {
+    const inner = async () => {
       readyzInnerCalls += 1;
       return { ready: true as const };
     };

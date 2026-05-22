@@ -1,0 +1,14 @@
+dist/
+node_modules/
+coverage/
+protocol-monorepo/
+ethereum-contracts/
+foundry/
+openzeppelin-relayer/
+superfluid-dashboard/
+tmp/
+test/fixtures/contracts/out/
+test/fixtures/contracts/cache/
+test/fixtures/contracts/lib/
+.pnpm-store/
+.cache/

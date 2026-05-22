@@ -11,6 +11,7 @@ export default defineConfig(
     "foundry/**",
     "openzeppelin-relayer/**",
     "superfluid-dashboard/**",
+    "protocol-monorepo/**",
     "tmp/**",
     "test/fixtures/contracts/out/**",
     "test/fixtures/contracts/cache/**",
