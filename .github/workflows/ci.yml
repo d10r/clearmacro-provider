@@ -36,8 +36,9 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
+      - run: pnpm run test:fixtures:build
       - run: pnpm run typecheck
       - run: pnpm run lint
       - run: pnpm run format:check
       - run: pnpm run build
-      - run: pnpm run test:ci
+      - run: pnpm test
