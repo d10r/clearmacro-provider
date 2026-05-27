@@ -203,6 +203,24 @@ describe("buildReconcilePlan", () => {
     );
   });
 
+  it("fails when a different active relayer exists for a desired chain", async () => {
+    const desired = desiredOneChain();
+    const client = mockClient({
+      networks: [
+        {
+          id: "evm:localhost-anvil",
+          network: "localhost-anvil",
+          chain_id: 31337,
+          rpc_urls: ["http://anvil:8545"],
+        },
+      ],
+      relayers: [{ id: "other-relayer", paused: false, network_type: "evm", network: "localhost-anvil" }],
+    });
+    await expect(buildReconcilePlan(client, desired, { pauseRemovedRelayers: false })).rejects.toThrow(
+      /provider\.json expects anvil-relayer/,
+    );
+  });
+
   it("plans pause for removed chains only with flag", async () => {
     const desired = desiredOneChain();
     const client = mockClient({

@@ -179,12 +179,9 @@ export async function buildReconcilePlan(
       );
     } else if (!activeIds.includes(desiredRelayerId)) {
       const existingId = activeIds[0]!;
-      actions.push({
-        kind: "noop",
-        chainId,
-        relayerId: existingId,
-        detail: `chainId ${chainId} already has active relayer ${existingId} (desired ${desiredRelayerId}); no relayer migration`,
-      });
+      throw new Error(
+        `OpenZeppelin relayer ${existingId} is active for chainId ${chainId}, but provider.json expects ${desiredRelayerId}. Resolve the relayer identity before apply.`,
+      );
     }
   }
 
