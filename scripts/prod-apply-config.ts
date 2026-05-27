@@ -5,12 +5,14 @@
  *   pnpm run prod:apply-config -- --dry-run
  *   pnpm run prod:apply-config
  *   pnpm run prod:apply-config -- --pause-removed-relayers
- *   pnpm run prod:apply-config -- --no-write-files --no-restart-app
+ *   pnpm run prod:apply-config -- --no-write-files
  *
- * Env: OZ_RELAYER_ADMIN_URL (optional), OZ_RELAYER_HOST_PORT, OZ_RELAYER_API_KEY,
+ * App restart after apply is handled by the host wrapper (`prod-compose-admin`), not this script.
+ * Use `pnpm run prod:apply-config -- --no-restart-app` to skip the host restart.
+ *
+ * Env: OZ_RELAYER_ADMIN_URL (optional; default http://oz-relayer:8080 in admin job), OZ_RELAYER_API_KEY,
  *      PROVIDER_CONFIG_PATH, OZ_RELAYER_CONFIG_PATH, OZ_EVM_NETWORKS_OUT
  */
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import dotenv from "dotenv";
@@ -38,14 +40,12 @@ function parseFlags(argv: string[]): {
   dryRun: boolean;
   pauseRemovedRelayers: boolean;
   writeFiles: boolean;
-  restartApp: boolean;
 } {
   const flags = new Set(argv.filter((a) => a.startsWith("--")));
   return {
     dryRun: flags.has("--dry-run"),
     pauseRemovedRelayers: flags.has("--pause-removed-relayers"),
     writeFiles: !flags.has("--no-write-files"),
-    restartApp: !flags.has("--no-restart-app"),
   };
 }
 
@@ -100,21 +100,6 @@ async function run(): Promise<void> {
   if (flags.writeFiles) {
     writeOzNetworkFiles(outPath, configPath, desired, true);
     console.log(`Updated ${outPath} and relayers[] in ${configPath}`);
-  }
-
-  if (flags.restartApp) {
-    const composeFile = process.env.COMPOSE_PROD_FILE ?? "compose.prod.yaml";
-    const result = spawnSync("docker", ["compose", "-f", composeFile, "restart", "app"], {
-      stdio: "inherit",
-    });
-    if (result.status !== 0) {
-      throw new Error(
-        `Failed to restart app via docker compose -f ${composeFile} restart app (exit ${result.status ?? "unknown"}). Restart manually after config apply.`,
-      );
-    }
-    console.log("Restarted app service.");
-  } else {
-    console.log("Skipped app restart (--no-restart-app). Restart app to load provider.json changes.");
   }
 }
 

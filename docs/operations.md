@@ -32,7 +32,7 @@ pnpm run dev
 
 `dev:oz-bootstrap` generates gitignored `config/oz-relayer/networks/evm.json` and `config.json` from the Anvil examples; production uses `prod:init` / `prod:apply-config` instead.
 
-The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. Inside `compose.prod.yaml`, the app uses `OZ_RELAYER_URL` defaulting to `http://oz-relayer:8080`. Host-side ops scripts (`prod:apply-config`, `prod:check-config`) use `OZ_RELAYER_ADMIN_URL` when set, otherwise `http://localhost:${OZ_RELAYER_HOST_PORT:-8080}`; `compose.prod.yaml` binds the relayer API to `127.0.0.1` only. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
+The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. Inside `compose.prod.yaml`, the app uses `OZ_RELAYER_URL` defaulting to `http://oz-relayer:8080`. Production admin commands (`prod:apply-config`, `prod:check-config`) are invoked from the host but execute in a one-off Compose `admin` container on the same network (`http://oz-relayer:8080`); the OZ relayer is not published to host ports. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
 
 Useful checks:
 
@@ -61,7 +61,7 @@ Production config has three state planes:
 | Live OZ networks/relayers | Redis via OZ API | `prod:apply-config` |
 | App policy (`config/provider.json`) | App container | Edit file + app restart via `prod:apply-config` |
 
-All admin commands run on the host over SSH. The app container talks to OZ at `http://oz-relayer:8080`; host admin scripts talk to `127.0.0.1:${OZ_RELAYER_HOST_PORT:-8080}` (or `OZ_RELAYER_ADMIN_URL`).
+All admin commands run on the host over SSH. The app and the `admin` job both talk to OZ at `http://oz-relayer:8080` on the Compose network. Do not publish OZ admin ports to the host to fix script access; use `pnpm run prod:apply-config` / `prod:check-config` instead.
 
 1. Create production `.env` from `.env.example`.
 2. Set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer and Redis secrets, and `DATABASE_PATH`.
@@ -87,7 +87,7 @@ At startup, the app queries OpenZeppelin Relayer and binds exactly one active re
 
 **`prod:init`** is idempotent bootstrap only: it does not rotate secrets or apply changes to live Redis-backed OZ state after first boot.
 
-**`prod:apply-config`** reconciles live OZ state via the host admin API (create/patch networks and relayers, update submission RPC URLs) without wiping Redis, updates bootstrap files for audit, validates relayer binding, and restarts the app (unless `--no-restart-app`). Its dry run previews the planned live OZ mutations and generated-file updates without applying them. Requires `redis` and `oz-relayer` to be running; defaults to `http://localhost:${OZ_RELAYER_HOST_PORT:-8080}`.
+**`prod:apply-config`** reconciles live OZ state via the internal admin API (create/patch networks and relayers, update submission RPC URLs) without wiping Redis, updates bootstrap files for audit, validates relayer binding, then the host wrapper restarts the app (unless `--no-restart-app`, which is host-only and not passed into the admin container). Its dry run previews the planned live OZ mutations and generated-file updates without applying them. Requires `redis` and `oz-relayer` to be running; runs the `admin` Compose profile job against `http://oz-relayer:8080`. If apply fails with a connection error, check `docker compose -f compose.prod.yaml ps` and `logs oz-relayer`.
 
 - **Macro policy / app RPCs:** carried in `provider.json`; app restart loads them. No Redis wipe.
 - **Add chain:** `prod:apply-config` creates OZ network + relayer when missing.

@@ -61,8 +61,7 @@ Execution states, deduplication, status codes, errors, and request fields (inclu
 | ---------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
 | `DATABASE_PATH`        | yes        | SQLite file path                                                                                |
 | `OZ_RELAYER_URL`       | app only   | In-container relayer URL; `compose.prod.yaml` defaults to `http://oz-relayer:8080`              |
-| `OZ_RELAYER_ADMIN_URL` | no         | Host-side URL for `prod:apply-config` / `prod:check-config`; defaults to `http://localhost:${OZ_RELAYER_HOST_PORT:-8080}` |
-| `OZ_RELAYER_HOST_PORT` | no         | Host bind for OZ admin API (`127.0.0.1` only in `compose.prod.yaml`); default `8080`            |
+| `OZ_RELAYER_ADMIN_URL` | no         | Advanced override for admin job; default in `admin` service is `http://oz-relayer:8080`           |
 | `OZ_RELAYER_API_KEY`   | yes        | Relayer API bearer                                                                              |
 | `PROVIDER_CONFIG_PATH` | no         | Default `config/provider.json`                                                                  |
 | `PROVIDER_NAME`        | yes        | Must match `payload.security.provider` from dapps (also returned by `GET /v1/capabilities`)     |
@@ -128,12 +127,12 @@ Production config touches three separate state planes:
 2. **Live OZ state** — Redis-backed networks/relayers owned by OpenZeppelin Relayer after first boot.
 3. **App runtime** — the provider app container reads `config/provider.json` and talks to OZ at `http://oz-relayer:8080`.
 
-Host-side admin commands (`prod:init`, `prod:apply-config`, `prod:check-config`) run over SSH on the server. Day-2 reconciliation uses the OZ admin API on `127.0.0.1:${OZ_RELAYER_HOST_PORT:-8080}` (or `OZ_RELAYER_ADMIN_URL`).
+Host-side admin commands (`prod:init`, `prod:apply-config`, `prod:check-config`) run over SSH on the server. Day-2 reconciliation (`prod:apply-config`, `prod:check-config`) runs a Compose `admin` one-off on the internal network at `http://oz-relayer:8080` (no host OZ port publish).
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** (same as `id -u` / `id -g` for the user that owns `config/oz-relayer/keys/*`; required for `compose.prod.yaml`; on POSIX, `pnpm run prod:init` fills these when missing), and if using auth, `API_CLIENTS_JSON`.
 2. **`config/provider.json`** — start from `config/provider.example.json` or generate a Superfluid-wide template with `pnpm run provider:gen:superfluid`, then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **Bootstrap:** `pnpm run prod:init` — secrets, keystore, and `config/oz-relayer/*` bootstrap files (see `config/oz-relayer/README.md`). Top up signer gas with **`pnpm run prod:fund`** (`SIMULATE=1` first).
-4. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. Then **`pnpm run prod:apply-config`** to reconcile live OZ Relayer state with `provider.json` (no Redis wipe). Ensure `redis` and `oz-relayer` are up before apply; compose publishes the OZ admin API on `127.0.0.1:${OZ_RELAYER_HOST_PORT:-8080}` only.
+4. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. Then **`pnpm run prod:apply-config`** to reconcile live OZ Relayer state with `provider.json` (no Redis wipe). Ensure `redis` and `oz-relayer` are up before apply.
 5. **Day-2 changes:** edit `provider.json`, run **`pnpm run prod:apply-config`** (`prod:apply-config:dry-run` to preview). Use **`pnpm run prod:check-config`** to detect live OZ drift and **`pnpm run prod:validate`** to validate local prod files/generated OZ config.
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
 

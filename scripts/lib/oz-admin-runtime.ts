@@ -6,12 +6,15 @@ export function requireEnv(name: string): string {
   return value;
 }
 
+const DEFAULT_IN_NETWORK_ADMIN_URL = "http://oz-relayer:8080";
+
 /**
- * Host-side ops scripts call the OZ admin API from outside Docker.
+ * URL for OpenZeppelin Relayer admin API calls from prod admin scripts.
  *
- * The app container uses `OZ_RELAYER_URL` (default `http://oz-relayer:8080` in
- * compose.prod.yaml). Host admin commands use `OZ_RELAYER_ADMIN_URL` or the
- * localhost port published by compose, not the in-network app URL.
+ * Production: run via `pnpm run prod:apply-config` / `prod:check-config`, which execute
+ * the Compose `admin` job with `OZ_RELAYER_ADMIN_URL=http://oz-relayer:8080`.
+ *
+ * The app runtime uses `OZ_RELAYER_URL` (same in-network default in compose.prod.yaml).
  */
 export function resolveOzRelayerAdminUrl(): string {
   const explicitAdminUrl = process.env.OZ_RELAYER_ADMIN_URL?.trim();
@@ -19,8 +22,7 @@ export function resolveOzRelayerAdminUrl(): string {
     return explicitAdminUrl;
   }
 
-  const hostPort = process.env.OZ_RELAYER_HOST_PORT?.trim() || "8080";
-  return `http://localhost:${hostPort}`;
+  return DEFAULT_IN_NETWORK_ADMIN_URL;
 }
 
 export type AssertOzRelayerAdminReachableOptions = {
@@ -29,7 +31,7 @@ export type AssertOzRelayerAdminReachableOptions = {
 };
 
 /**
- * Fail fast when host-side admin commands cannot reach the OZ relayer API.
+ * Fail fast when admin commands cannot reach the OZ relayer API.
  */
 export async function assertOzRelayerAdminReachable(
   adminUrl: string,
@@ -50,8 +52,9 @@ export async function assertOzRelayerAdminReachable(
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
       `Cannot reach OpenZeppelin Relayer admin API at ${adminUrl}: ${detail}\n` +
-        `Start the relayer stack first:\n` +
-        `  docker compose -f ${composeFile} up -d redis oz-relayer`,
+        `Ensure redis and oz-relayer are running, then retry:\n` +
+        `  docker compose -f ${composeFile} up -d redis oz-relayer\n` +
+        `  pnpm run prod:apply-config`,
       { cause: error },
     );
   } finally {
