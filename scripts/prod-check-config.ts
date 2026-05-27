@@ -6,21 +6,19 @@ import { resolve } from "node:path";
 import dotenv from "dotenv";
 import { buildDesiredOzStateFromPath } from "./lib/oz-desired-state.js";
 import { OzAdminClient } from "./lib/oz-admin-client.js";
+import {
+  assertOzRelayerAdminReachable,
+  requireEnv,
+  resolveOzRelayerAdminUrl,
+} from "./lib/oz-admin-runtime.js";
 import { buildReconcilePlan, formatPlanForConsole, planNeedsOzMutation } from "./lib/oz-reconcile.js";
 
 dotenv.config();
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim().length === 0) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
-
 async function run(): Promise<void> {
-  const ozRelayerUrl = requireEnv("OZ_RELAYER_URL");
+  const ozRelayerUrl = resolveOzRelayerAdminUrl();
   const ozApiKey = requireEnv("OZ_RELAYER_API_KEY");
+  await assertOzRelayerAdminReachable(ozRelayerUrl);
   const timeoutMs = Number.parseInt(process.env.RELAYER_REQUEST_TIMEOUT_MS ?? "30000", 10);
   const providerConfigPath = resolve(process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json");
 

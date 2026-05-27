@@ -32,7 +32,7 @@ pnpm run dev
 
 `dev:oz-bootstrap` generates gitignored `config/oz-relayer/networks/evm.json` and `config.json` from the Anvil examples; production uses `prod:init` / `prod:apply-config` instead.
 
-The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_URL`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
+The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. Inside `compose.prod.yaml`, the app uses `OZ_RELAYER_URL` defaulting to `http://oz-relayer:8080`. Host-side ops scripts (`prod:apply-config`, `prod:check-config`) use `OZ_RELAYER_ADMIN_URL` when set, otherwise `http://localhost:${OZ_RELAYER_HOST_PORT:-8080}`; `compose.prod.yaml` binds the relayer API to `127.0.0.1` only. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
 
 Useful checks:
 
@@ -53,13 +53,23 @@ It requires Docker, Docker Compose v2, Foundry, and local Anvil/OZ relayer fixtu
 
 ## Production Deployment
 
+Production config has three state planes:
+
+| Plane | Owner | Updated by |
+|-------|-------|------------|
+| Bootstrap files (`config/oz-relayer/*`) | Host filesystem | `prod:init`, then `prod:apply-config` (audit copy) |
+| Live OZ networks/relayers | Redis via OZ API | `prod:apply-config` |
+| App policy (`config/provider.json`) | App container | Edit file + app restart via `prod:apply-config` |
+
+All admin commands run on the host over SSH. The app container talks to OZ at `http://oz-relayer:8080`; host admin scripts talk to `127.0.0.1:${OZ_RELAYER_HOST_PORT:-8080}` (or `OZ_RELAYER_ADMIN_URL`).
+
 1. Create production `.env` from `.env.example`.
 2. Set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer and Redis secrets, and `DATABASE_PATH`.
 3. Set `OZ_RELAYER_UID` and `OZ_RELAYER_GID` to the numeric owner of `config/oz-relayer/keys/*`; `pnpm run prod:init` fills these when missing on POSIX systems.
 4. Provide `config/provider.json` from a checked-in example or generated Superfluid template, then set production RPC URLs and `macroPolicy`.
 5. Run **`pnpm run prod:init`** once to generate secrets, keystore, and bootstrap `config/oz-relayer/*` files.
 6. Start with `docker compose -f compose.prod.yaml up -d --build` or `pnpm run stack:prod` (first boot with empty Redis imports OZ bootstrap files).
-7. Run **`pnpm run prod:apply-config`** so live OZ Relayer state matches `provider.json` (required after the first boot if Redis already had state).
+7. Run **`pnpm run prod:apply-config`** so live OZ Relayer state matches `provider.json` (required after the first boot if Redis already had state). If the admin API is unreachable, start `redis` and `oz-relayer` first.
 
 At startup, the app queries OpenZeppelin Relayer and binds exactly one active relayer per configured `chainId`. Missing or ambiguous relayer matches fail startup by design.
 
@@ -77,7 +87,7 @@ At startup, the app queries OpenZeppelin Relayer and binds exactly one active re
 
 **`prod:init`** is idempotent bootstrap only: it does not rotate secrets or apply changes to live Redis-backed OZ state after first boot.
 
-**`prod:apply-config`** reconciles live OZ state via API (create/patch networks and relayers, update submission RPC URLs) without wiping Redis, updates bootstrap files for audit, validates relayer binding, and restarts the app (unless `--no-restart-app`). Its dry run previews the planned live OZ mutations and generated-file updates without applying them.
+**`prod:apply-config`** reconciles live OZ state via the host admin API (create/patch networks and relayers, update submission RPC URLs) without wiping Redis, updates bootstrap files for audit, validates relayer binding, and restarts the app (unless `--no-restart-app`). Its dry run previews the planned live OZ mutations and generated-file updates without applying them. Requires `redis` and `oz-relayer` to be running; defaults to `http://localhost:${OZ_RELAYER_HOST_PORT:-8080}`.
 
 - **Macro policy / app RPCs:** carried in `provider.json`; app restart loads them. No Redis wipe.
 - **Add chain:** `prod:apply-config` creates OZ network + relayer when missing.

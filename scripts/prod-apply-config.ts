@@ -7,7 +7,8 @@
  *   pnpm run prod:apply-config -- --pause-removed-relayers
  *   pnpm run prod:apply-config -- --no-write-files --no-restart-app
  *
- * Env: OZ_RELAYER_URL, OZ_RELAYER_API_KEY, PROVIDER_CONFIG_PATH, OZ_RELAYER_CONFIG_PATH, OZ_EVM_NETWORKS_OUT
+ * Env: OZ_RELAYER_ADMIN_URL (optional), OZ_RELAYER_HOST_PORT, OZ_RELAYER_API_KEY,
+ *      PROVIDER_CONFIG_PATH, OZ_RELAYER_CONFIG_PATH, OZ_EVM_NETWORKS_OUT
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -25,16 +26,13 @@ import {
   writeOzNetworkFiles,
 } from "./lib/oz-desired-state.js";
 import { OzAdminClient } from "./lib/oz-admin-client.js";
+import {
+  assertOzRelayerAdminReachable,
+  requireEnv,
+  resolveOzRelayerAdminUrl,
+} from "./lib/oz-admin-runtime.js";
 
 dotenv.config();
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim().length === 0) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
 
 function parseFlags(argv: string[]): {
   dryRun: boolean;
@@ -53,8 +51,9 @@ function parseFlags(argv: string[]): {
 
 async function run(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2));
-  const ozRelayerUrl = requireEnv("OZ_RELAYER_URL");
+  const ozRelayerUrl = resolveOzRelayerAdminUrl();
   const ozApiKey = requireEnv("OZ_RELAYER_API_KEY");
+  await assertOzRelayerAdminReachable(ozRelayerUrl);
   const timeoutMs = Number.parseInt(process.env.RELAYER_REQUEST_TIMEOUT_MS ?? "30000", 10);
   const providerConfigPath = resolve(process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json");
   const outPath = resolve(process.env.OZ_EVM_NETWORKS_OUT ?? "config/oz-relayer/networks/evm.json");

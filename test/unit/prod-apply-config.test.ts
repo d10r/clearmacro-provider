@@ -7,7 +7,7 @@ const tsxBin = resolve(repoRoot, "node_modules/.bin/tsx");
 const scriptPath = resolve(repoRoot, "scripts/prod-apply-config.ts");
 
 describe("prod:apply-config CLI", () => {
-  it("exits non-zero when required env vars are missing", () => {
+  it("exits non-zero when required API key is missing", () => {
     expect(() =>
       execFileSync(tsxBin, [scriptPath, "--dry-run"], {
         cwd: repoRoot,
