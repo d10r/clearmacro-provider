@@ -4,7 +4,7 @@
     {
       "chainId": 8453,
       "forwarderAddress": "0x0000000000000000000000000000000000000000",
-      "rpcUrls": ["https://example.invalid"],
+      "rpcUrls": ["https://mainnet.base.org"],
       "macroPolicy": {
         "mode": "allowlist",
         "allowedMacros": [

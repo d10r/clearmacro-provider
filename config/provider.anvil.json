@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "chains": [
+    {
+      "chainId": 31337,
+      "forwarderAddress": "0x0000000000000000000000000000000000000001",
+      "rpcUrls": ["http://127.0.0.1:8545"],
+      "macroPolicy": {
+        "mode": "open"
+      }
+    }
+  ]
+}

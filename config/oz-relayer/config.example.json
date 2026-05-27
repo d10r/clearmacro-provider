@@ -1,0 +1,31 @@
+{
+  "relayers": [
+    {
+      "id": "anvil-relayer",
+      "name": "Local Anvil Relayer",
+      "network": "localhost-anvil",
+      "paused": false,
+      "signer_id": "anvil-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "anvil-signer",
+      "type": "local",
+      "config": {
+        "path": "./config/keys/anvil-relayer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "OZ_KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "/app/config/networks",
+  "plugins": []
+}

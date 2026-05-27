@@ -3,6 +3,7 @@ import { relative, resolve, sep } from "node:path";
 import dotenv from "dotenv";
 import { Keystore } from "ox";
 import { privateKeyToAccount } from "viem/accounts";
+import { buildDesiredOzState, loadProviderConfigFromPath } from "./lib/oz-desired-state.js";
 
 dotenv.config();
 
@@ -19,14 +20,6 @@ type OzRelayerConfig = {
   networks?: unknown;
 };
 
-type ProviderConfig = {
-  chains: {
-    chainId: number;
-    rpcUrls: string[];
-    macroPolicy?: { mode?: string };
-  }[];
-};
-
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -39,6 +32,12 @@ function requireSecret(name: string): void {
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
+}
+
+function assertJsonEqual(actual: unknown, expected: unknown, label: string): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(`${label} is stale or does not match config/provider.json; run pnpm run prod:init or pnpm run prod:apply-config`);
+  }
 }
 
 function readSignerAddressFromKeystore(keystorePath: string, passphrase: string): string {
@@ -122,7 +121,12 @@ async function run(): Promise<void> {
     fail(`${relayerConfigPath} must point networks to /app/config/networks`);
   }
 
-  const signer = config.signers[0] as { type?: unknown; config?: { path?: unknown; passphrase?: { value?: unknown } } };
+  const signer = config.signers[0] as {
+    id?: unknown;
+    type?: unknown;
+    config?: { path?: unknown; passphrase?: { value?: unknown } };
+  };
+  if (typeof signer.id !== "string" || signer.id.trim().length === 0) fail("Signer id must be a non-empty string");
   if (signer.type !== "local") fail("Only local signer config is supported by prod:init/prod:validate");
   if (signer.config?.passphrase?.value !== "OZ_KEYSTORE_PASSPHRASE") {
     fail("Signer passphrase must reference OZ_KEYSTORE_PASSPHRASE");
@@ -132,13 +136,16 @@ async function run(): Promise<void> {
     fail("Signer keystore path does not match OZ_RELAYER_KEYSTORE_PATH");
   }
 
-  const networks = readJson(networksOutPath) as { networks?: unknown };
-  if (!Array.isArray(networks.networks) || networks.networks.length !== config.relayers.length) {
+  const networksFile = readJson(networksOutPath) as { networks?: unknown };
+  if (!Array.isArray(networksFile.networks) || networksFile.networks.length !== config.relayers.length) {
     fail("Generated OZ networks count must match relayers count");
   }
+  const providerConfig = loadProviderConfigFromPath(providerConfigPath);
+  const desired = buildDesiredOzState(providerConfig, { signerId: signer.id });
+  assertJsonEqual(networksFile.networks, desired.networks, `${networksOutPath} networks[]`);
+  assertJsonEqual(config.relayers, desired.relayers, `${relayerConfigPath} relayers[]`);
 
   const signerAddress = readSignerAddressFromKeystore(keystorePath, process.env.OZ_KEYSTORE_PASSPHRASE ?? "");
-  const providerConfig = readJson(providerConfigPath) as ProviderConfig;
   console.log(`Signer address: ${signerAddress}`);
   console.log("Configured chain balances:");
   for (const chain of providerConfig.chains) {

@@ -6,8 +6,8 @@ import { estimateTxFundingBreakdown, resolveMaxFeePerGas } from "./estimate-tx-f
 const DEFAULT_REFERENCE_GAS_LIMIT = 200_000n;
 
 /** Representative `runMacro` calldata for gas / fee estimation (not submitted). */
-export function referenceRunMacroCalldata(_forwarderAddress: Address): Hex {
-  const placeholder = "0x0000000000000000000000000000000000000001" as Address;
+export function referenceRunMacroCalldata(forwarderAddress: Address): Hex {
+  const placeholder = forwarderAddress;
   const signature = `0x${"00".repeat(65)}` as Hex;
   return buildRunMacroCalldata({
     macro: placeholder,

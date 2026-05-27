@@ -25,10 +25,12 @@ flowchart LR
 
 ```bash
 pnpm install
-pnpm run oz:bootstrap:anvil
+pnpm run dev:oz-bootstrap
 pnpm run stack:dev
 pnpm run dev
 ```
+
+`dev:oz-bootstrap` generates gitignored `config/oz-relayer/networks/evm.json` and `config.json` from the Anvil examples; production uses `prod:init` / `prod:apply-config` instead.
 
 The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_URL`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
 
@@ -55,17 +57,38 @@ It requires Docker, Docker Compose v2, Foundry, and local Anvil/OZ relayer fixtu
 2. Set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer and Redis secrets, and `DATABASE_PATH`.
 3. Set `OZ_RELAYER_UID` and `OZ_RELAYER_GID` to the numeric owner of `config/oz-relayer/keys/*`; `pnpm run prod:init` fills these when missing on POSIX systems.
 4. Provide `config/provider.json` from a checked-in example or generated Superfluid template, then set production RPC URLs and `macroPolicy`.
-5. Provide OpenZeppelin Relayer config and keystores under `config/oz-relayer/`.
-6. Run `pnpm run oz:gen:networks` after the provider registry is final, and optionally `pnpm run oz:gen:networks -- --update-config`.
-7. Start with `docker compose -f compose.prod.yaml up -d --build` or `pnpm run stack:prod`.
+5. Run **`pnpm run prod:init`** once to generate secrets, keystore, and bootstrap `config/oz-relayer/*` files.
+6. Start with `docker compose -f compose.prod.yaml up -d --build` or `pnpm run stack:prod` (first boot with empty Redis imports OZ bootstrap files).
+7. Run **`pnpm run prod:apply-config`** so live OZ Relayer state matches `provider.json` (required after the first boot if Redis already had state).
 
 At startup, the app queries OpenZeppelin Relayer and binds exactly one active relayer per configured `chainId`. Missing or ambiguous relayer matches fail startup by design.
+
+## Config lifecycle (day 2)
+
+`config/provider.json` is the single source of truth for supported chains, forwarders, app RPCs, and macro policy.
+
+| Change | Command |
+|--------|---------|
+| First-time bootstrap | `pnpm run prod:init` then `docker compose -f compose.prod.yaml up -d --build` |
+| Any later config change | Edit `provider.json`, then `pnpm run prod:apply-config` |
+| Preview config apply actions | `pnpm run prod:apply-config:dry-run` |
+| Check live vs desired drift | `pnpm run prod:check-config` |
+| Validate local prod config files, generated OZ files, and signer balances | `pnpm run prod:validate` |
+
+**`prod:init`** is idempotent bootstrap only: it does not rotate secrets or apply changes to live Redis-backed OZ state after first boot.
+
+**`prod:apply-config`** reconciles live OZ state via API (create/patch networks and relayers, update submission RPC URLs) without wiping Redis, updates bootstrap files for audit, validates relayer binding, and restarts the app (unless `--no-restart-app`). Its dry run previews the planned live OZ mutations and generated-file updates without applying them.
+
+- **Macro policy / app RPCs:** carried in `provider.json`; app restart loads them. No Redis wipe.
+- **Add chain:** `prod:apply-config` creates OZ network + relayer when missing.
+- **Remove chain:** app stops serving the chain after restart; OZ relayers are left as-is by default. Use `--pause-removed-relayers` to pause orphans.
+- **Emergency reset:** `docker compose -f compose.prod.yaml down` and remove volume `clearmacro-provider_oz-redis-data` only for pre-prod or break-glass (drops in-flight relayer queue state). Do not use `RESET_STORAGE_ON_START=true` in normal operations.
 
 ## Relayer signer gas
 
 The OpenZeppelin Relayer signer must hold native gas on every chain in `config/provider.json`.
 
-- **Check balances:** `pnpm run prod:validate` (prints per-chain balance).
+- **Check balances:** `pnpm run prod:validate` (validates local prod files/env, confirms generated OZ files match `provider.json`, and prints per-chain signer balance from provider RPCs).
 - **Top up:** `pnpm run prod:fund` — per-chain `fundingTxCount` from **30d Superfluid `flowUpdatedEvents`** (subgraph), scaled vs the median chain (`FUNDING_BASE_TX_COUNT`, default `30`). Provider SQLite relay history overrides subgraph when present. Use `SIMULATE=1` first. Flat mode: `TARGET_TX_COUNT=30`. Filters: `CHAIN_IDS`, `TESTNET_ONLY=1`, `MAINNET_ONLY=1`.
 - **Metrics:** on `GET /metrics`, sampled every `RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS` (default 60 minutes; `0` disables):
   - `clearmacro_relayer_signer_balance_native{chain_id}` — latest native-token balance

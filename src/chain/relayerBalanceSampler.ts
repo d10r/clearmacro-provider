@@ -64,7 +64,6 @@ export function startRelayerSignerBalanceSampler(input: {
 }): { stop: () => void; sampleOnce: () => Promise<void> } {
   let stopped = false;
   let tickInFlight = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
 
   const sampleOnce = async (): Promise<void> => {
     if (tickInFlight) {
@@ -85,7 +84,7 @@ export function startRelayerSignerBalanceSampler(input: {
 
   void sampleOnce();
 
-  timer = setInterval(() => {
+  const timer = setInterval(() => {
     if (!stopped) {
       void sampleOnce();
     }
@@ -94,9 +93,7 @@ export function startRelayerSignerBalanceSampler(input: {
   return {
     stop: () => {
       stopped = true;
-      if (timer !== undefined) {
-        clearInterval(timer);
-      }
+      clearInterval(timer);
     },
     sampleOnce,
   };

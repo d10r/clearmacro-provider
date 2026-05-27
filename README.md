@@ -96,9 +96,11 @@ When `ethereum-contracts` publishes a release that includes ClearMacro, you can 
 
 ```bash
 pnpm install
-pnpm run oz:bootstrap:anvil
+pnpm run dev:oz-bootstrap
 pnpm run stack:dev
 ```
+
+`dev:oz-bootstrap` copies `config/provider.anvil.json` and `config/oz-relayer/config.example.json` when missing, creates the Anvil keystore, and generates gitignored `config/oz-relayer/networks/evm.json` for the Docker OZ relayer.
 
 Run the API (needs `.env` with at least `DATABASE_PATH`, `OZ_*`, `PROVIDER_NAME`, and a valid `config/provider.json`):
 
@@ -120,9 +122,11 @@ pnpm run build
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** (same as `id -u` / `id -g` for the user that owns `config/oz-relayer/keys/*`; required for `compose.prod.yaml`; on POSIX, `pnpm run prod:init` fills these when missing), and if using auth, `API_CLIENTS_JSON`.
 2. **`config/provider.json`** — start from `config/provider.example.json` or generate a Superfluid-wide template with `pnpm run provider:gen:superfluid`, then set `rpcUrls` and `macroPolicy` for your deployment.
-3. **OpenZeppelin Relayer** — under `config/oz-relayer/` (see `config/oz-relayer/README.md`). After the registry is final, run **`pnpm run oz:gen:networks`** (and optionally **`-- --update-config`**) so `networks/evm.json` (and relayer entries) match Superfluid-backed chains. Signers and keystores stay manual; top up signer gas with **`pnpm run prod:fund`** (`SIMULATE=1` first) — see [docs/operations.md](docs/operations.md).
-4. **Startup** — the app **binds** exactly one active relayer per registry `chainId` by querying the relayer API; misconfiguration causes startup failure (by design).
-5. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. The app always listens on **port 3000 inside the container**; set **`CLEARMACRO_PROVIDER_HOST_PORT`** in `.env` to choose the **host** port mapped to it (default `3000`; see `compose.prod.yaml`).
+3. **Bootstrap:** `pnpm run prod:init` — secrets, keystore, and `config/oz-relayer/*` bootstrap files (see `config/oz-relayer/README.md`). Top up signer gas with **`pnpm run prod:fund`** (`SIMULATE=1` first).
+4. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. Then **`pnpm run prod:apply-config`** to reconcile live OZ Relayer state with `provider.json` (no Redis wipe).
+5. **Day-2 changes:** edit `provider.json`, run **`pnpm run prod:apply-config`** (`prod:apply-config:dry-run` to preview). Use **`pnpm run prod:check-config`** to detect live OZ drift and **`pnpm run prod:validate`** to validate local prod files/generated OZ config.
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
+
+See [docs/operations.md](docs/operations.md) for the full config lifecycle and readiness runbook.
 
 Operational notes: keep Redis persistence for the relayer; back up **both** app SQLite and Redis volumes; run **one** app instance per SQLite file (single worker design). See [`docs/operations.md`](docs/operations.md) for the deployment checklist and readiness runbook.

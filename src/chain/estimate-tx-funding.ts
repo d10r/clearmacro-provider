@@ -127,7 +127,7 @@ export async function estimateTxFundingBreakdown(params: {
       l1Wei = await l1DataFee(client, SCROLL_L1_GAS_ORACLE, txParams);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      throw new Error(`Cannot estimate scroll L1 data fee on chain ${chainId}: ${detail}`);
+      throw new Error(`Cannot estimate scroll L1 data fee on chain ${chainId}: ${detail}`, { cause: e });
     }
     return { l2Wei, l1Wei, totalWei: withBuffer(l1Wei + l2Wei), feeModel: "scroll" };
   }
@@ -138,7 +138,7 @@ export async function estimateTxFundingBreakdown(params: {
       l1Wei = await l1DataFee(client, OP_GAS_PRICE_ORACLE, txParams);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      throw new Error(`Cannot estimate OP Stack L1 data fee on chain ${chainId}: ${detail}`);
+      throw new Error(`Cannot estimate OP Stack L1 data fee on chain ${chainId}: ${detail}`, { cause: e });
     }
     return { l2Wei, l1Wei, totalWei: withBuffer(l1Wei + l2Wei), feeModel: "op-stack" };
   }

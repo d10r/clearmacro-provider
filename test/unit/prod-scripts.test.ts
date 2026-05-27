@@ -53,11 +53,12 @@ describe("production scripts", () => {
   it("generates OZ relayer config from app-level registry", () => {
     const cwd = makeWorkspace();
 
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-init.ts")], {
+    const initOut = execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-init.ts")], {
       cwd,
       env: scriptEnv(),
-      stdio: "pipe",
+      encoding: "utf8",
     });
+    expect(initOut).toContain("prod:apply-config");
 
     const config = JSON.parse(readFileSync(join(cwd, "config/oz-relayer/config.json"), "utf8")) as {
       relayers: { signer_id: string; network: string }[];

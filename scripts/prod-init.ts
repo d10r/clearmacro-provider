@@ -181,6 +181,12 @@ async function run(): Promise<void> {
   console.log(`Prepared production relayer config: ${relayerConfigPath}`);
   console.log(`Relayer keystore: ${keystorePath}`);
   console.log("Fund the relayer signer with native gas on every enabled provider-config chain before starting prod.");
+  console.log("");
+  console.log("NOTE: prod:init writes bootstrap files only.");
+  console.log("If OpenZeppelin Relayer already has Redis-backed state, rerunning prod:init does NOT update live relayers.");
+  console.log("For day-2 config changes (chains, RPCs, macros), edit config/provider.json and run:");
+  console.log("  pnpm run prod:apply-config");
+  console.log("First boot with empty Redis imports these files automatically; otherwise use prod:apply-config.");
 }
 
 try {
