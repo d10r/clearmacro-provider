@@ -9,7 +9,7 @@ import { networkApiId, rpcUrlsToWeightedPayload } from "./oz-desired-state.js";
 import { OzAdminClient, type OzNetworkRecord } from "./oz-admin-client.js";
 
 export type ReconcileActionKind =
-  | "create_network"
+  | "bootstrap_required"
   | "patch_network_rpc"
   | "create_relayer"
   | "patch_relayer_unpause"
@@ -31,6 +31,8 @@ export type ReconcilePlan = {
   liveRelayersByChainId: Map<number, string[]>;
   /** chainIds in provider but with no live relayer after plan (pre-apply). */
   missingRelayerChainIds: number[];
+  /** chainIds whose OZ network is absent and cannot be created through the OZ v1.4 API. */
+  bootstrapRequiredChainIds: number[];
 };
 
 export type BuildPlanOptions = {
@@ -108,6 +110,7 @@ export async function buildReconcilePlan(
   opts: BuildPlanOptions,
 ): Promise<ReconcilePlan> {
   const actions: ReconcileAction[] = [];
+  const bootstrapRequiredChainIds: number[] = [];
   const desiredChainIds = new Set(desired.networks.map((n) => n.chain_id));
   const liveNetworks = await client.listNetworks();
   const liveRelayerIds = await client.listRelayerIds();
@@ -125,12 +128,14 @@ export async function buildReconcilePlan(
     const desiredRelayerId = desired.relayerIdByChainId.get(chainId)!;
 
     if (!liveNet) {
+      bootstrapRequiredChainIds.push(chainId);
       actions.push({
-        kind: "create_network",
+        kind: "bootstrap_required",
         chainId,
         networkApiId: apiId,
-        detail: `Create network ${apiId} (chainId ${chainId})`,
+        detail: `OZ network ${apiId} (chainId ${chainId}) is missing; add it through the bootstrap/re-import workflow, not the live API`,
       });
+      continue;
     } else {
       const liveRpc = OzAdminClient.networkRecordRpcUrls(liveNet);
       if (!rpcUrlsEqual(oz.rpc_urls, liveRpc)) {
@@ -204,9 +209,10 @@ export async function buildReconcilePlan(
   const missingRelayerChainIds: number[] = [];
   for (const chainId of desiredChainIds) {
     const activeIds = liveActiveRelayersByChainId.get(chainId) ?? [];
+    const willBootstrap = actions.some((a) => a.chainId === chainId && a.kind === "bootstrap_required");
     const willCreate = actions.some((a) => a.chainId === chainId && a.kind === "create_relayer");
     const willUnpause = actions.some((a) => a.chainId === chainId && a.kind === "patch_relayer_unpause");
-    if (activeIds.length === 0 && !willCreate && !willUnpause) {
+    if (activeIds.length === 0 && !willBootstrap && !willCreate && !willUnpause) {
       missingRelayerChainIds.push(chainId);
     }
   }
@@ -216,7 +222,13 @@ export async function buildReconcilePlan(
     actions.push({ kind: "noop", detail: "Live OZ state matches desired provider registry" });
   }
 
-  return { actions, desiredChainIds, liveRelayersByChainId: liveActiveRelayersByChainId, missingRelayerChainIds };
+  return {
+    actions,
+    desiredChainIds,
+    liveRelayersByChainId: liveActiveRelayersByChainId,
+    missingRelayerChainIds,
+    bootstrapRequiredChainIds,
+  };
 }
 
 export type ApplyPlanOptions = {
@@ -254,7 +266,7 @@ export async function applyReconcilePlan(
   const skipped: ReconcileAction[] = [];
 
   const order: Record<ReconcileActionKind, number> = {
-    create_network: 0,
+    bootstrap_required: 0,
     patch_network_rpc: 1,
     create_relayer: 2,
     patch_relayer_unpause: 3,
@@ -274,21 +286,8 @@ export async function applyReconcilePlan(
     }
 
     switch (action.kind) {
-      case "create_network": {
-        const oz = desiredNetworkForChain(desired, action.chainId!);
-        await client.createNetwork({
-          network: oz.network,
-          type: "evm",
-          chain_id: oz.chain_id,
-          is_testnet: oz.is_testnet,
-          required_confirmations: oz.required_confirmations,
-          average_blocktime_ms: oz.average_blocktime_ms,
-          symbol: oz.symbol,
-          rpc_urls: oz.rpc_urls,
-        });
-        applied.push(action);
-        break;
-      }
+      case "bootstrap_required":
+        throw new Error(bootstrapRequiredMessage(plan.bootstrapRequiredChainIds));
       case "patch_network_rpc": {
         const oz = desiredNetworkForChain(desired, action.chainId!);
         await client.updateNetworkRpcUrls(action.networkApiId!, rpcUrlsToWeightedPayload(oz.rpc_urls));
@@ -332,7 +331,19 @@ export function formatPlanForConsole(plan: ReconcilePlan): string {
   for (const action of plan.actions) {
     lines.push(`  [${action.kind}] ${action.detail}`);
   }
+  if (plan.bootstrapRequiredChainIds.length > 0) {
+    lines.push(bootstrapRequiredMessage(plan.bootstrapRequiredChainIds));
+  }
   return lines.join("\n");
+}
+
+export function bootstrapRequiredMessage(chainIds: readonly number[]): string {
+  const rendered = chainIds.join(", ");
+  return [
+    `Bootstrap required for chainId(s): ${rendered}.`,
+    "OpenZeppelin Relayer v1.4 can patch existing networks but cannot create new networks through the admin API.",
+    "Regenerate config/oz-relayer/networks/evm.json from provider.json, then run the documented OZ Redis re-import/maintenance workflow.",
+  ].join(" ");
 }
 
 export async function validateRelayerBinding(

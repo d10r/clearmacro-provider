@@ -1,5 +1,6 @@
 /**
- * OpenZeppelin Relayer admin API (network/relayer CRUD) for ops scripts.
+ * OpenZeppelin Relayer admin API helpers for ops scripts.
+ * OZ v1.4 can patch existing networks, but new networks are bootstrapped from config files.
  * Runtime app code uses src/relayer/client.ts for relay operations only.
  */
 import { OzRelayerHttpError, OzRelayerRateLimitError } from "../../src/relayer/errors.js";
@@ -17,17 +18,6 @@ export type OzNetworkRecord = {
   is_testnet?: boolean;
   symbol?: string;
   average_blocktime_ms?: number;
-};
-
-export type CreateEvmNetworkPayload = {
-  network: string;
-  type: "evm";
-  chain_id: number;
-  is_testnet: boolean;
-  required_confirmations: number;
-  average_blocktime_ms: number;
-  symbol: string;
-  rpc_urls: string[];
 };
 
 export type CreateRelayerPayload = {
@@ -149,17 +139,6 @@ export class OzAdminClient {
       method: "GET",
     });
     return { ...data, id: data.id ?? networkApiId };
-  }
-
-  async createNetwork(payload: CreateEvmNetworkPayload): Promise<OzNetworkRecord> {
-    const networkApiId = `evm:${payload.network}`;
-    return this.callEnvelope<OzNetworkRecord>("/api/v1/networks", {
-      method: "POST",
-      body: JSON.stringify({
-        ...payload,
-        id: networkApiId,
-      }),
-    });
   }
 
   async updateNetworkRpcUrls(

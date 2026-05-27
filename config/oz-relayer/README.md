@@ -10,9 +10,9 @@ Compose mounts this directory at `/app/config` **read-only**. Keystore JSON from
 
 ## Bootstrap files vs live OZ state
 
-Files under this directory are **bootstrap / desired-state artifacts**. On first boot with an empty Redis volume, OpenZeppelin Relayer imports them once. With `REPOSITORY_STORAGE_TYPE=redis` and `RESET_STORAGE_ON_START=false` (production default), later edits to these files **do not** change live relayers until you reconcile via API.
+Files under this directory are **bootstrap / desired-state artifacts**. On first boot with an empty Redis volume, OpenZeppelin Relayer imports them once. With `REPOSITORY_STORAGE_TYPE=redis` and `RESET_STORAGE_ON_START=false` (production default), later edits to these files do not create new live OZ networks.
 
-Use **`pnpm run prod:apply-config`** after changing `config/provider.json` so live OZ networks/relayers match without wiping Redis. Run it from the host; it executes a Compose `admin` job that calls the OZ admin API at `http://oz-relayer:8080` on the internal network.
+Use **`pnpm run prod:apply-config`** after changing `config/provider.json` so API-safe live changes (existing-network RPC updates, relayer create/update/pause, app restart) are applied without wiping Redis. Run it from the host; it executes a Compose `admin` job that calls the OZ admin API at `http://oz-relayer:8080` on the internal network. If a provider chain needs a brand-new OZ network, the command reports `bootstrap_required`; add that network through the documented Redis re-import/maintenance workflow.
 
 ## Generate `networks/evm.json` from the registry
 

@@ -71,7 +71,6 @@ function mockClient(live: {
       if (!net) throw new Error("not found");
       return net;
     }),
-    createNetwork: vi.fn(async () => ({})),
     updateNetworkRpcUrls: vi.fn(async () => ({})),
     createRelayer: vi.fn(async () => ({})),
     updateRelayer: vi.fn(async () => ({})),
@@ -94,15 +93,17 @@ describe("buildReconcilePlan", () => {
     });
     const plan = await buildReconcilePlan(client, desired, { pauseRemovedRelayers: false });
     expect(plan.actions.some((a) => a.kind === "noop")).toBe(true);
-    expect(plan.actions.some((a) => a.kind === "create_network")).toBe(false);
+    expect(plan.actions.some((a) => a.kind === "bootstrap_required")).toBe(false);
   });
 
-  it("plans create_network and create_relayer when missing", async () => {
+  it("plans bootstrap_required when OZ network is missing", async () => {
     const desired = desiredOneChain();
     const client = mockClient({ networks: [], relayers: [] });
     const plan = await buildReconcilePlan(client, desired, { pauseRemovedRelayers: false });
-    expect(plan.actions.map((a) => a.kind)).toContain("create_network");
-    expect(plan.actions.map((a) => a.kind)).toContain("create_relayer");
+    expect(plan.actions.map((a) => a.kind)).toContain("bootstrap_required");
+    expect(plan.actions.map((a) => a.kind)).not.toContain("create_relayer");
+    expect(plan.bootstrapRequiredChainIds).toEqual([31337]);
+    expect(plan.missingRelayerChainIds).toHaveLength(0);
   });
 
   it("plans patch_network_rpc when rpc urls differ", async () => {
@@ -266,7 +267,14 @@ describe("applyReconcilePlan", () => {
     const plan = await buildReconcilePlan(client, desired, { pauseRemovedRelayers: false });
     const result = await applyReconcilePlan(client, desired, plan, { dryRun: true });
     expect(result.applied).toHaveLength(0);
-    expect(client.createNetwork).not.toHaveBeenCalled();
+    expect(client.createRelayer).not.toHaveBeenCalled();
+  });
+
+  it("non-dry-run fails before applying when bootstrap is required", async () => {
+    const desired = desiredOneChain();
+    const client = mockClient({ networks: [], relayers: [] });
+    const plan = await buildReconcilePlan(client, desired, { pauseRemovedRelayers: false });
+    await expect(applyReconcilePlan(client, desired, plan, { dryRun: false })).rejects.toThrow(/Bootstrap required/);
     expect(client.createRelayer).not.toHaveBeenCalled();
   });
 

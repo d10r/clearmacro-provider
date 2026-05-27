@@ -28,6 +28,9 @@ async function run(): Promise<void> {
 
   if (planNeedsOzMutation(plan)) {
     console.error(formatPlanForConsole(plan));
+    if (plan.bootstrapRequiredChainIds.length > 0) {
+      throw new Error("Live OZ network bootstrap required. See plan above.");
+    }
     throw new Error("Live OZ Relayer state drifts from provider.json. Run: pnpm run prod:apply-config");
   }
 

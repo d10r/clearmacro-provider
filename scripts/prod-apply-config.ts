@@ -74,7 +74,7 @@ async function run(): Promise<void> {
   console.log(formatPlanForConsole(plan));
   if (plan.missingRelayerChainIds.length > 0) {
     console.warn(
-      `Warning: chainIds still missing relayer after plan: ${plan.missingRelayerChainIds.join(", ")} (will retry create after network)`,
+      `Warning: chainIds still missing relayer after plan: ${plan.missingRelayerChainIds.join(", ")}`,
     );
   }
 
