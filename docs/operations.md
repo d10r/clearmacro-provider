@@ -61,6 +61,18 @@ It requires Docker, Docker Compose v2, Foundry, and local Anvil/OZ relayer fixtu
 
 At startup, the app queries OpenZeppelin Relayer and binds exactly one active relayer per configured `chainId`. Missing or ambiguous relayer matches fail startup by design.
 
+## Relayer signer gas
+
+The OpenZeppelin Relayer signer must hold native gas on every chain in `config/provider.json`.
+
+- **Check balances:** `pnpm run prod:validate` (prints per-chain balance).
+- **Top up:** `pnpm run prod:fund` — per-chain `fundingTxCount` from **30d Superfluid `flowUpdatedEvents`** (subgraph), scaled vs the median chain (`FUNDING_BASE_TX_COUNT`, default `30`). Provider SQLite relay history overrides subgraph when present. Use `SIMULATE=1` first. Flat mode: `TARGET_TX_COUNT=30`. Filters: `CHAIN_IDS`, `TESTNET_ONLY=1`, `MAINNET_ONLY=1`.
+- **Metrics:** on `GET /metrics`, sampled every `RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS` (default 60 minutes; `0` disables):
+  - `clearmacro_relayer_signer_balance_native{chain_id}` — latest native-token balance
+  - `clearmacro_relayer_signer_balance_probe_success{chain_id}` — `1` if the last sample succeeded
+  - `clearmacro_relayer_signer_balance_last_update_timestamp_seconds{chain_id}` — last successful sample time (alert if stale)
+- **Alerting:** Gate low-balance alerts on `clearmacro_relayer_signer_balance_probe_success == 1` so a failed RPC/OZ sample is not mistaken for an empty wallet. Treat data as stale when `time() - clearmacro_relayer_signer_balance_last_update_timestamp_seconds` exceeds roughly two sample intervals (default ~2 hours at the 60-minute interval). Readiness and relay traffic still catch zero balance on admission; these metrics are for coarse monitoring between samples.
+
 ## Verification
 
 After deployment:

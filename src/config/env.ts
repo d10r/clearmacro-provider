@@ -106,6 +106,27 @@ export function loadEnv() {
     readinessCacheRateLimitedTtlMs: parseInteger("READINESS_CACHE_RATE_LIMITED_TTL_MS", 1500, 0),
     readinessOzRetryMaxAttempts: parseInteger("READINESS_OZ_RETRY_MAX_ATTEMPTS", 3, 1),
     readinessOzRetryBaseDelayMs: parseInteger("READINESS_OZ_RETRY_BASE_DELAY_MS", 100, 1),
+    /** Background relayer signer balance sampler interval (0 disables). Default 60 minutes. */
+    relayerSignerBalanceSampleIntervalMs: parseRelayerSignerBalanceSampleIntervalMs(),
   };
+}
+
+const RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_DEFAULT_MS = 60 * 60 * 1000;
+
+function parseRelayerSignerBalanceSampleIntervalMs(): number {
+  const value = process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS;
+  if (value === undefined) {
+    return RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_DEFAULT_MS;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid integer env var RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS: ${value}`);
+  }
+  if (parsed > 0 && parsed < 5000) {
+    throw new Error(
+      `Invalid integer env var RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS: ${value} (minimum 5000 when enabled)`,
+    );
+  }
+  return parsed;
 }
 

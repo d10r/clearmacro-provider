@@ -27,6 +27,7 @@
     "oz:gen:networks": "tsx scripts/generate-oz-relayer-networks.ts",
     "prod:init": "tsx scripts/prod-init.ts",
     "prod:validate": "tsx scripts/prod-validate.ts",
+    "prod:fund": "tsx scripts/prod-fund-signer.ts",
     "provider:gen:superfluid": "tsx scripts/generate-registry-superfluid.ts",
     "abi:sync:clear-macro-forwarder": "tsx scripts/sync-clear-macro-forwarder-abi.ts",
     "stack:dev": "docker compose up -d redis anvil oz-relayer",

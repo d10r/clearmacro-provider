@@ -13,7 +13,9 @@ import { OzRelayerClient } from "./relayer/client.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { createApp } from "./app.js";
 import { createReadyzReadinessCache } from "./chain/readinessCache.js";
+import { startRelayerSignerBalanceSampler } from "./chain/relayerBalanceSampler.js";
 import { evaluateChainReadiness, getForwarderDigest, validateRelaySignature } from "./chain/readiness.js";
+import { createMetrics } from "./metrics/metrics.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -31,13 +33,15 @@ async function main(): Promise<void> {
 
   await bindRelayersToRegistry(registry, relayerClient);
 
+  const metrics = createMetrics();
   const ozPollBackoff = { until: 0 };
   const ozRetry = {
     maxAttempts: env.readinessOzRetryMaxAttempts,
     baseDelayMs: env.readinessOzRetryBaseDelayMs,
   };
-  const evaluateChainReadinessUncached = (chainId: number) =>
-    evaluateChainReadiness({ registry, chainId, relayerClient, ozRetry });
+
+  const readinessBase = { registry, relayerClient, ozRetry };
+  const evaluateChainReadinessUncached = (chainId: number) => evaluateChainReadiness({ ...readinessBase, chainId });
   const getReadyzChainReadiness =
     env.readinessCacheSuccessTtlMs > 0 || env.readinessCacheRateLimitedTtlMs > 0
       ? createReadyzReadinessCache(evaluateChainReadinessUncached, {
@@ -58,6 +62,7 @@ async function main(): Promise<void> {
     requestMaxMetadataKeys: env.requestMaxMetadataKeys,
     requestMaxMetadataValueLength: env.requestMaxMetadataValueLength,
     logLevel: env.logLevel,
+    metrics,
     getChainReadiness: evaluateChainReadinessUncached,
     getReadyzChainReadiness,
     getForwarderDigest: (input) =>
@@ -86,6 +91,20 @@ async function main(): Promise<void> {
     app.log.info(
       { chainId: chain.chainId, macroPolicy: "allowlist", macroCount: chain.macroPolicy.allowedMacros.length },
       "registry chain loaded",
+    );
+  }
+
+  if (env.relayerSignerBalanceSampleIntervalMs > 0) {
+    startRelayerSignerBalanceSampler({
+      registry,
+      relayerClient,
+      metrics,
+      intervalMs: env.relayerSignerBalanceSampleIntervalMs,
+      logger: app.log,
+    });
+    app.log.info(
+      { intervalMs: env.relayerSignerBalanceSampleIntervalMs },
+      "relayer signer balance sampler started",
     );
   }
 

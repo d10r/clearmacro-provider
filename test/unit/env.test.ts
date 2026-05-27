@@ -9,6 +9,7 @@ afterEach(() => {
   delete process.env.PORT;
   delete process.env.API_AUTH_ENABLED;
   delete process.env.API_CLIENTS_JSON;
+  delete process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS;
 });
 
 describe("loadEnv", () => {
@@ -26,6 +27,17 @@ describe("loadEnv", () => {
     expect(env.port).toBe(3333);
     expect(env.apiAuthEnabled).toBe(true);
     expect(env.providerName).toBe("macros.superfluid.eth");
+    expect(env.relayerSignerBalanceSampleIntervalMs).toBe(60 * 60 * 1000);
+  });
+
+  it("parses relayer signer balance sample interval", () => {
+    process.env.DATABASE_PATH = ":memory:";
+    process.env.OZ_RELAYER_URL = "http://localhost:8080";
+    process.env.OZ_RELAYER_API_KEY = "token";
+    process.env.PROVIDER_NAME = "macros.superfluid.eth";
+    process.env.API_AUTH_ENABLED = "false";
+    process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS = "0";
+    expect(loadEnv().relayerSignerBalanceSampleIntervalMs).toBe(0);
   });
 
   it("fails on missing required values", () => {

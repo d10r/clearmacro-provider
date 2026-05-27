@@ -15,7 +15,7 @@ import {
   RelayerTransactionRepository,
 } from "./db/repositories.js";
 import type { OzRelayerClient } from "./relayer/client.js";
-import { createMetrics } from "./metrics/metrics.js";
+import { createMetrics, type AppMetrics } from "./metrics/metrics.js";
 
 export type AppDeps = {
   registry: LoadedRegistry;
@@ -34,11 +34,12 @@ export type AppDeps = {
   getForwarderDigest: RegisterRoutesDeps["getForwarderDigest"];
   validateRelaySignature: RegisterRoutesDeps["validateRelaySignature"];
   preflightRunMacro?: RegisterRoutesDeps["preflightRunMacro"];
+  metrics?: AppMetrics;
 };
 
 export async function createApp(deps: AppDeps) {
   const app = Fastify({ logger: { level: deps.logLevel } });
-  const metrics = createMetrics();
+  const metrics = deps.metrics ?? createMetrics();
 
   await app.register(swagger, {
     openapi: {

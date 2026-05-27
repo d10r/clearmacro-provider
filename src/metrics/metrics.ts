@@ -42,6 +42,36 @@ export function createMetrics() {
     registers: [registry],
   });
 
-  return { registry, requestCounter, validationFailureCounter, relayerSubmissionCounter, relayerPollLatency, readinessGauge };
-}
+  const relayerSignerBalanceNative = new Gauge({
+    name: "clearmacro_relayer_signer_balance_native",
+    help: "Latest sampled native-token balance of the bound OpenZeppelin Relayer signer",
+    labelNames: ["chain_id"] as const,
+    registers: [registry],
+  });
 
+  const relayerSignerBalanceProbeSuccess = new Gauge({
+    name: "clearmacro_relayer_signer_balance_probe_success",
+    help: "1 when the latest balance sample for this chain succeeded, 0 otherwise",
+    labelNames: ["chain_id"] as const,
+    registers: [registry],
+  });
+
+  const relayerSignerBalanceLastUpdateTimestampSeconds = new Gauge({
+    name: "clearmacro_relayer_signer_balance_last_update_timestamp_seconds",
+    help: "Unix timestamp (seconds) of the last successful balance sample for this chain",
+    labelNames: ["chain_id"] as const,
+    registers: [registry],
+  });
+
+  return {
+    registry,
+    requestCounter,
+    validationFailureCounter,
+    relayerSubmissionCounter,
+    relayerPollLatency,
+    readinessGauge,
+    relayerSignerBalanceNative,
+    relayerSignerBalanceProbeSuccess,
+    relayerSignerBalanceLastUpdateTimestampSeconds,
+  };
+}
