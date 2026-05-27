@@ -146,8 +146,12 @@ async function run(): Promise<void> {
   assertJsonEqual(config.relayers, desired.relayers, `${relayerConfigPath} relayers[]`);
 
   const signerAddress = readSignerAddressFromKeystore(keystorePath, process.env.OZ_KEYSTORE_PASSPHRASE ?? "");
+  const verbose = process.env.VERBOSE === "1" || process.env.VERBOSE === "true";
   console.log(`Signer address: ${signerAddress}`);
-  console.log("Configured chain balances:");
+  if (verbose) {
+    console.log("Configured chain balances:");
+  }
+  const balanceFailures: string[] = [];
   for (const chain of providerConfig.chains) {
     const mode = chain.macroPolicy?.mode ?? "unknown";
     const rpcUrl = chain.rpcUrls[0];
@@ -157,11 +161,23 @@ async function run(): Promise<void> {
     }
     try {
       const balanceWei = await readNativeBalance(rpcUrl, signerAddress);
-      console.log(`- chainId=${chain.chainId} mode=${mode} rpc=${rpcUrl} balance=${formatEthFromWei(balanceWei)}`);
+      if (verbose) {
+        console.log(`- chainId=${chain.chainId} mode=${mode} rpc=${rpcUrl} balance=${formatEthFromWei(balanceWei)}`);
+      }
+      if (balanceWei <= 0n) {
+        balanceFailures.push(`chainId=${chain.chainId}: signer has zero native balance`);
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      console.log(`- chainId=${chain.chainId} mode=${mode} rpc=${rpcUrl} balance=unavailable (${reason})`);
+      balanceFailures.push(`chainId=${chain.chainId}: signer balance unavailable (${reason})`);
     }
+  }
+  if (balanceFailures.length > 0) {
+    fail(
+      `Production signer funding validation failed:\n` +
+        balanceFailures.map((f) => `- ${f}`).join("\n") +
+        `\nFund ${signerAddress} with native gas on each configured chain, or remove unsupported chains from config/provider.json.`,
+    );
   }
 
   console.log("Production config validation passed.");

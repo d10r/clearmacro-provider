@@ -129,7 +129,7 @@ export class OzAdminClient {
     const networks: OzNetworkRecord[] = [];
     const seen = new Set<string>();
     let page = 1;
-    const limit = 50;
+    const limit = 10;
     while (true) {
       const envelope = await this.call<OzEnvelope<unknown>>(`/api/v1/networks?page=${page}&limit=${limit}`, {
         method: "GET",
@@ -143,14 +143,16 @@ export class OzAdminClient {
       if (batch.length === 0) {
         break;
       }
+      let added = 0;
       for (const item of batch) {
         const id = item.id ?? item.network ?? "";
         if (id && !seen.has(id)) {
           seen.add(id);
           networks.push(item);
+          added += 1;
         }
       }
-      if (batch.length < limit) {
+      if (batch.length < limit || added === 0) {
         break;
       }
       page += 1;
@@ -179,7 +181,7 @@ export class OzAdminClient {
     const ids: string[] = [];
     const seen = new Set<string>();
     let page = 1;
-    const limit = 50;
+    const limit = 10;
     while (true) {
       const envelope = await this.call<OzEnvelope<unknown>>(`/api/v1/relayers?page=${page}&limit=${limit}`, {
         method: "GET",
@@ -194,13 +196,15 @@ export class OzAdminClient {
       if (batch.length === 0) {
         break;
       }
+      let added = 0;
       for (const item of batch) {
         if (!seen.has(item.id)) {
           seen.add(item.id);
           ids.push(item.id);
+          added += 1;
         }
       }
-      if (batch.length < limit) {
+      if (batch.length < limit || added === 0) {
         break;
       }
       page += 1;

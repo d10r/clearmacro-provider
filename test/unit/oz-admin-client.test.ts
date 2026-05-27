@@ -37,7 +37,7 @@ describe("OzAdminClient", () => {
   it("paginates listNetworks across pages", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes("/api/v1/networks?page=1")) {
-        const pageOne = Array.from({ length: 50 }, (_, index) => ({
+        const pageOne = Array.from({ length: 10 }, (_, index) => ({
           id: `evm:page1-${index}`,
           network: `page1-${index}`,
           chain_id: index + 1,
@@ -70,8 +70,40 @@ describe("OzAdminClient", () => {
     const client = new OzAdminClient("http://oz:8080", "test-api-key-32-characters-minimum", 5000);
     const networks = await client.listNetworks();
 
-    expect(networks).toHaveLength(51);
+    expect(networks).toHaveLength(11);
     expect(networks.at(-1)?.id).toBe("evm:base-sepolia");
+  });
+
+  it("paginates listRelayerIds across OpenZeppelin's capped page size", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/api/v1/relayers?page=1")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: Array.from({ length: 10 }, (_, index) => ({ id: `relayer-${index}` })),
+            error: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/v1/relayers?page=2")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: [{ id: "relayer-10" }, { id: "relayer-11" }],
+            error: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ success: true, data: [], error: null }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OzAdminClient("http://oz:8080", "test-api-key-32-characters-minimum", 5000);
+    const relayers = await client.listRelayerIds();
+
+    expect(relayers).toEqual([...Array.from({ length: 10 }, (_, i) => `relayer-${i}`), "relayer-10", "relayer-11"]);
   });
 
   it("POSTs create relayer with expected body", async () => {

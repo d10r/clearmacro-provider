@@ -77,7 +77,7 @@ export function loadEnv() {
   }
   const providerConfigPath = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
   return {
-    databasePath: requireString("DATABASE_PATH"),
+    databasePath: process.env.DATABASE_PATH ?? "./data/clearmacro-provider-dev.sqlite",
     ozRelayerUrl: requireString("OZ_RELAYER_URL"),
     ozRelayerApiKey: requireString("OZ_RELAYER_API_KEY"),
     registryPath: providerConfigPath,
@@ -129,4 +129,3 @@ function parseRelayerSignerBalanceSampleIntervalMs(): number {
   }
   return parsed;
 }
-

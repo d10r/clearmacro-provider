@@ -11,7 +11,7 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: "3000"
-      DATABASE_PATH: ${DATABASE_PATH:-/data/clearmacro-provider.sqlite}
+      DATABASE_PATH: /data/clearmacro-provider.sqlite
       PROVIDER_CONFIG_PATH: ${PROVIDER_CONFIG_PATH:-/app/config/provider.json}
       OZ_RELAYER_URL: ${OZ_RELAYER_URL:-http://oz-relayer:8080}
       OZ_RELAYER_API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}

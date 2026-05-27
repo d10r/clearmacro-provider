@@ -205,7 +205,7 @@ export class OzRelayerClient {
     const ids: string[] = [];
     const seen = new Set<string>();
     let page = 1;
-    const limit = 50;
+    const limit = 10;
     while (true) {
       const envelope = await this.call<OzEnvelope<unknown>>(`/api/v1/relayers?page=${page}&limit=${limit}`, { method: "GET" });
       if (!envelope.success || envelope.data === null || envelope.data === undefined) {
@@ -215,13 +215,15 @@ export class OzRelayerClient {
       if (batch.length === 0) {
         break;
       }
+      let added = 0;
       for (const item of batch) {
         if (!seen.has(item.id)) {
           seen.add(item.id);
           ids.push(item.id);
+          added += 1;
         }
       }
-      if (batch.length < limit) {
+      if (batch.length < limit || added === 0) {
         break;
       }
       page += 1;

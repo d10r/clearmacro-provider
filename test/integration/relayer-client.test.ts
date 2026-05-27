@@ -78,6 +78,39 @@ describe("oz relayer client", () => {
     expect(ids).toEqual(["rel-a", "rel-b"]);
   });
 
+  it("continues paginating when OpenZeppelin caps page size at 10", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes("/relayers?page=1")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: Array.from({ length: 10 }, (_, i) => ({ id: `rel-${i}` })),
+              error: null,
+            }),
+            { status: 200 },
+          );
+        }
+        if (u.includes("/relayers?page=2")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: [{ id: "rel-10" }, { id: "rel-11" }],
+              error: null,
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ success: true, data: [], error: null }), { status: 200 });
+      }),
+    );
+    const client = new OzRelayerClient(baseUrl, "token", 200);
+    const ids = await client.listRelayerIds();
+    expect(ids).toEqual([...Array.from({ length: 10 }, (_, i) => `rel-${i}`), "rel-10", "rel-11"]);
+  });
+
   it("lists relayer ids from a top-level array response", async () => {
     vi.stubGlobal(
       "fetch",

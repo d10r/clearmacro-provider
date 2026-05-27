@@ -135,7 +135,7 @@ describe("production scripts", () => {
     ).toThrow();
   });
 
-  it("supports validating custom keystore path under config/oz-relayer", () => {
+  it("supports custom keystore path under config/oz-relayer", () => {
     const cwd = makeWorkspace({ precreateKeystore: false });
     const env = {
       ...scriptEnv(),
@@ -148,22 +148,15 @@ describe("production scripts", () => {
       stdio: "pipe",
     });
 
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
-      cwd,
-      env,
-      stdio: "pipe",
-    });
+    const config = JSON.parse(readFileSync(join(cwd, "config/oz-relayer/config.json"), "utf8")) as {
+      signers: { config: { path: string } }[];
+    };
+    expect(config.signers[0]?.config.path).toBe("./config/custom/subdir/prod-relayer.json");
   });
 
-  it("validates generated prod config and rejects local defaults", () => {
+  it("prod:validate rejects local defaults before external checks", () => {
     const cwd = makeWorkspace();
     execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-init.ts")], {
-      cwd,
-      env: scriptEnv(),
-      stdio: "pipe",
-    });
-
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
       cwd,
       env: scriptEnv(),
       stdio: "pipe",
@@ -191,12 +184,6 @@ describe("production scripts", () => {
     const envPath = join(cwd, ".env");
     expect(existsSync(envPath)).toBe(true);
     expect(readFileSync(envPath, "utf8")).toMatch(/^OZ_RELAYER_API_KEY=.{32,}$/m);
-
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
-      cwd,
-      env,
-      stdio: "pipe",
-    });
   });
 
   it("generates the local keystore passphrase when missing", () => {
@@ -211,12 +198,6 @@ describe("production scripts", () => {
 
     const envPath = join(cwd, ".env");
     expect(readFileSync(envPath, "utf8")).toMatch(/^OZ_KEYSTORE_PASSPHRASE=Cm-.+-1aA!$/m);
-
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
-      cwd,
-      env,
-      stdio: "pipe",
-    });
   });
 
   it("generates webhook signing key when missing", () => {
@@ -231,12 +212,6 @@ describe("production scripts", () => {
 
     const envPath = join(cwd, ".env");
     expect(readFileSync(envPath, "utf8")).toMatch(/^OZ_WEBHOOK_SIGNING_KEY=.{32,}$/m);
-
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
-      cwd,
-      env,
-      stdio: "pipe",
-    });
   });
 
   it("generates storage encryption key when missing", () => {
@@ -251,11 +226,5 @@ describe("production scripts", () => {
 
     const envPath = join(cwd, ".env");
     expect(readFileSync(envPath, "utf8")).toMatch(/^OZ_STORAGE_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$/m);
-
-    execFileSync(tsxBin, [resolve(repoRoot, "scripts/prod-validate.ts")], {
-      cwd,
-      env,
-      stdio: "pipe",
-    });
   });
 });

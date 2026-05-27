@@ -59,7 +59,7 @@ Execution states, deduplication, status codes, errors, and request fields (inclu
 
 | Variable               | Required   | Notes                                                                                           |
 | ---------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `DATABASE_PATH`        | yes        | SQLite file path                                                                                |
+| `DATABASE_PATH`        | no         | Local/non-Compose SQLite path; production Compose always uses `/data/clearmacro-provider.sqlite` |
 | `OZ_RELAYER_URL`       | app only   | In-container relayer URL; `compose.prod.yaml` defaults to `http://oz-relayer:8080`              |
 | `OZ_RELAYER_ADMIN_URL` | no         | Advanced override for admin job; default in `admin` service is `http://oz-relayer:8080`           |
 | `OZ_RELAYER_API_KEY`   | yes        | Relayer API bearer                                                                              |
@@ -103,7 +103,7 @@ pnpm run stack:dev
 
 `dev:oz-bootstrap` copies `config/provider.anvil.json` and `config/oz-relayer/config.example.json` when missing, creates the Anvil keystore, and generates gitignored `config/oz-relayer/networks/evm.json` for the Docker OZ relayer.
 
-Run the API (needs `.env` with at least `DATABASE_PATH`, `OZ_*`, `PROVIDER_NAME`, and a valid `config/provider.json`):
+Run the API (needs `.env` with at least `OZ_*`, `PROVIDER_NAME`, and a valid `config/provider.json`; `DATABASE_PATH` defaults to `./data/clearmacro-provider-dev.sqlite` for local runs):
 
 ```bash
 pnpm run dev
@@ -127,14 +127,22 @@ Production config touches three separate state planes:
 2. **Live OZ state** — Redis-backed networks/relayers owned by OpenZeppelin Relayer after first boot.
 3. **App runtime** — the provider app container reads `config/provider.json` and talks to OZ at `http://oz-relayer:8080`.
 
-Host-side admin commands (`prod:init`, `prod:verify-oz-import`, `prod:apply-config`, `prod:check-config`) run over SSH on the server. Live OZ admin jobs run as a Compose `admin` one-off on the internal network at `http://oz-relayer:8080` (no host OZ port publish).
+The normal admin path is `prod:init`, `prod:up`, and `prod:check`. Lower-level commands (`prod:verify-oz-import`, `prod:apply-config`, `prod:check-config`) remain available for troubleshooting and are run by the wrappers as needed. Live OZ admin jobs run as a Compose `admin` one-off on the internal network at `http://oz-relayer:8080` (no host OZ port publish).
 
-1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** (same as `id -u` / `id -g` for the user that owns `config/oz-relayer/keys/*`; required for `compose.prod.yaml`; on POSIX, `pnpm run prod:init` fills these when missing), and if using auth, `API_CLIENTS_JSON`.
+1. **`.env`** from `.env.example` — set `PROVIDER_NAME`, and if using auth, `API_CLIENTS_JSON`. `pnpm run prod:init` fills generated relayer/redis secrets and `OZ_RELAYER_UID` / `OZ_RELAYER_GID` when missing. Do not set `DATABASE_PATH` for production Compose.
 2. **`config/provider.json`** — start from `config/provider.example.json` or generate a Superfluid-wide template with `pnpm run provider:gen:superfluid`, then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **Bootstrap:** `pnpm run prod:init` — secrets, keystore, and `config/oz-relayer/*` bootstrap files (see `config/oz-relayer/README.md`). Top up signer gas with **`pnpm run prod:fund`** (`SIMULATE=1` first).
-4. **Compose:** `docker compose -f compose.prod.yaml up -d redis oz-relayer`, then **`pnpm run prod:verify-oz-import`**, then **`pnpm run prod:apply-config`**, then start `app` (or use `scripts/prod-apply-provider-config.sh` for the full sequence).
-5. **Day-2 changes:** edit `provider.json`, run **`scripts/prod-apply-provider-config.sh`** (or `prod:verify-oz-import` then `prod:apply-config`). `prod:verify-oz-import` fails before the app starts if OZ did not import every expected network/relayer.
-6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
+4. **Validate and start:** `pnpm run prod:up` — validates files/secrets/funding, starts Redis and OZ Relayer, verifies/imports live OZ state, starts the app, and runs production checks.
+5. **Day-2 changes:** edit `provider.json`, then run **`pnpm run prod:up`** again. The command is idempotent and applies live OZ config before starting/restarting the app.
+6. **Verify anytime:** `pnpm run prod:check` — validates local config and signer funding, checks live OZ state, and hits `GET /healthz`, `GET /readyz`, and `GET /v1/capabilities`.
+
+Advanced troubleshooting commands:
+
+- `pnpm run prod:validate` — local files/secrets/bootstrap/funding validation. Use `VERBOSE=1` to print every chain balance.
+- `pnpm run prod:verify-oz-import` — verify first-boot OZ import before app startup.
+- `pnpm run prod:apply-config` — reconcile live Redis-backed OZ state with `provider.json`.
+- `pnpm run prod:check-config` — check live OZ drift without changing state.
+- `pnpm run stack:prod:logs` — follow production Compose logs.
 
 See [docs/operations.md](docs/operations.md) for the full config lifecycle and readiness runbook.
 
