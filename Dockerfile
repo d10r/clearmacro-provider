@@ -12,6 +12,7 @@ RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
 COPY config ./config
 RUN pnpm run build
 
