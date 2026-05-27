@@ -18,7 +18,7 @@ Use **`pnpm run prod:apply-config`** after changing `config/provider.json` so AP
 
 `networks/evm.json` is **not** committed. It is generated from `config/provider.json` and should match that file (enforced by `pnpm run prod:validate`).
 
-From the repo root (after `pnpm install`), `@superfluid-finance/metadata` supplies chain names, testnet flag, native symbol, and public RPC fallbacks; your `config/provider.json` lists which chains to include and should set **`rpcUrls`** first when you use private endpoints.
+From the repo root (after `pnpm install`), `@superfluid-finance/metadata` supplies chain names, testnet flag, and native symbol; your `config/provider.json` lists which chains to include. For OZ Relayer, the `rpcUrls` entries from `provider.json` are the operator-curated RPC list. Keep every listed URL stable and production-grade.
 
 ```bash
 # local Anvil stack (compose.yaml)

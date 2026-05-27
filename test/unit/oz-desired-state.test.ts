@@ -3,8 +3,8 @@ import {
   buildDesiredOzState,
   buildOzNetwork,
   buildRelayerEntry,
-  mergeRpcUrls,
   networkApiId,
+  providerRpcUrls,
   rpcUrlsToWeightedPayload,
 } from "../../scripts/lib/oz-desired-state.js";
 import type { Registry } from "../../src/config/schema.js";
@@ -14,10 +14,10 @@ function minimalRegistry(chains: Registry["chains"]): Registry {
 }
 
 describe("oz-desired-state", () => {
-  it("merges provider rpcUrls before public fallbacks with dedup", () => {
-    expect(mergeRpcUrls(["https://private.example"], ["https://public.example", "https://private.example"])).toEqual([
-      "https://private.example",
-      "https://public.example",
+  it("uses only operator-curated provider RPC URLs for OZ networks", () => {
+    expect(providerRpcUrls(["https://primary.example", "https://fallback.example", "https://primary.example"])).toEqual([
+      "https://primary.example",
+      "https://fallback.example",
     ]);
   });
 

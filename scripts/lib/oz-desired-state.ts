@@ -66,16 +66,10 @@ export function defaultRequiredConfirmations(chainId: number): number {
   return chainId === 1 ? 12 : 1;
 }
 
-export function mergeRpcUrls(providerUrls: readonly string[], publicRpcs: readonly string[] | undefined): string[] {
+export function providerRpcUrls(providerUrls: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const u of providerUrls) {
-    if (!seen.has(u)) {
-      seen.add(u);
-      out.push(u);
-    }
-  }
-  for (const u of publicRpcs ?? []) {
     if (!seen.has(u)) {
       seen.add(u);
       out.push(u);
@@ -100,7 +94,7 @@ export function loadProviderConfigFromPath(providerConfigPath: string): Registry
 }
 
 function buildAnvilNetwork(chain: Registry["chains"][number]): OzEvmNetwork {
-  const rpc_urls = mergeRpcUrls(chain.rpcUrls, undefined);
+  const rpc_urls = providerRpcUrls(chain.rpcUrls);
   if (rpc_urls.length === 0) {
     throw new Error(
       `Provider config chainId 31337 (Anvil): set "rpcUrls" on the chain (e.g. ["http://anvil:8545"] for Docker compose).`,
@@ -129,7 +123,8 @@ function buildSfBackedNetwork(chain: Registry["chains"][number], warnDeprecated 
   if (warnDeprecated && sf.isDeprecated) {
     console.warn(`Warning: Superfluid marks ${sf.name} (chainId ${chain.chainId}) as deprecated.`);
   }
-  const rpc_urls = mergeRpcUrls(chain.rpcUrls, sf.publicRPCs);
+  // The provider registry is the operator-curated RPC list for OZ health checks and submission.
+  const rpc_urls = providerRpcUrls(chain.rpcUrls);
   if (rpc_urls.length === 0) {
     throw new Error(
       `chainId ${chain.chainId} (${sf.name}): no RPC URLs. Add "rpcUrls" to this chain in provider config, or ensure metadata lists publicRPCs.`,

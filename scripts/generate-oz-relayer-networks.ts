@@ -1,9 +1,9 @@
 /**
  * Builds `config/oz-relayer/networks/evm.json` from `config/provider.json` plus
- * `@superfluid-finance/metadata` (chain names, testnet flag, native symbol, public RPCs).
+ * `@superfluid-finance/metadata` (chain names, testnet flag, native symbol).
  *
- * RPC order: provider-config `rpcUrls` first (for private endpoints), then Superfluid `publicRPCs`.
- * At least one URL is required per chain (set `rpcUrls` in provider config if metadata has none).
+ * OZ uses the provider-config `rpcUrls` entries as the operator-curated RPC list.
+ * Keep every listed URL production-grade.
  *
  * Local Anvil (chainId 31337) is supported without Superfluid metadata when `rpcUrls` are set.
  *
