@@ -28,7 +28,7 @@
     "oz:gen:networks": "tsx scripts/generate-oz-relayer-networks.ts",
     "prod:init": "tsx scripts/prod-init.ts",
     "prod:up": "bash scripts/prod-up.sh",
-    "prod:check": "pnpm run prod:validate && pnpm run prod:check-config && curl -fsS http://localhost:${CLEARMACRO_PROVIDER_HOST_PORT:-3000}/healthz >/dev/null && curl -fsS http://localhost:${CLEARMACRO_PROVIDER_HOST_PORT:-3000}/readyz >/dev/null && curl -fsS http://localhost:${CLEARMACRO_PROVIDER_HOST_PORT:-3000}/v1/capabilities >/dev/null && echo 'Production stack check passed.'",
+    "prod:check": "bash scripts/prod-check.sh",
     "prod:apply-config": "tsx scripts/prod-compose-admin.ts apply-config",
     "prod:apply-config:dry-run": "tsx scripts/prod-compose-admin.ts apply-config --dry-run",
     "prod:check-config": "tsx scripts/prod-compose-admin.ts check-config",
