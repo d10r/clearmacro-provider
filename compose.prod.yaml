@@ -38,6 +38,12 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
     volumes:
       - oz-redis-data:/data
 
@@ -47,7 +53,8 @@ services:
     # Keystores under ./config/oz-relayer are often mode 0600; run as that host user (see .env.example).
     user: "${OZ_RELAYER_UID:?set OZ_RELAYER_UID}:${OZ_RELAYER_GID:?set OZ_RELAYER_GID}"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     environment:
       APP_PORT: 8080
       METRICS_PORT: 8081

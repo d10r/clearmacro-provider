@@ -6,6 +6,12 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
     volumes:
       - oz-redis-data:/data
 
@@ -31,8 +37,10 @@ services:
     # Match ownership of bind-mounted ./config/oz-relayer/keys (defaults suit many Linux desktops).
     user: "${OZ_RELAYER_UID:-1000}:${OZ_RELAYER_GID:-1000}"
     depends_on:
-      - redis
-      - anvil
+      redis:
+        condition: service_healthy
+      anvil:
+        condition: service_started
     environment:
       APP_PORT: 8080
       METRICS_PORT: 8081

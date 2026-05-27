@@ -28,6 +28,12 @@ services:
       - redis-server
       - --appendonly
       - "yes"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
     volumes:
       - e2e-oz-redis:/data
 
@@ -36,8 +42,10 @@ services:
     # Stack dir is populated on the host; run as that UID/GID (E2E sets from process.getuid).
     user: "${OZ_RELAYER_UID:-1000}:${OZ_RELAYER_GID:-1000}"
     depends_on:
-      - redis
-      - anvil
+      redis:
+        condition: service_healthy
+      anvil:
+        condition: service_started
     ports:
       - "${E2E_OZ_HOST_PORT:?E2E_OZ_HOST_PORT required}:8080"
     environment:
