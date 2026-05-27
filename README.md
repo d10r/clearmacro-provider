@@ -127,13 +127,13 @@ Production config touches three separate state planes:
 2. **Live OZ state** — Redis-backed networks/relayers owned by OpenZeppelin Relayer after first boot.
 3. **App runtime** — the provider app container reads `config/provider.json` and talks to OZ at `http://oz-relayer:8080`.
 
-Host-side admin commands (`prod:init`, `prod:apply-config`, `prod:check-config`) run over SSH on the server. Day-2 reconciliation (`prod:apply-config`, `prod:check-config`) runs a Compose `admin` one-off on the internal network at `http://oz-relayer:8080` (no host OZ port publish).
+Host-side admin commands (`prod:init`, `prod:verify-oz-import`, `prod:apply-config`, `prod:check-config`) run over SSH on the server. Live OZ admin jobs run as a Compose `admin` one-off on the internal network at `http://oz-relayer:8080` (no host OZ port publish).
 
 1. **`.env`** from `.env.example` — set `OZ_RELAYER_API_KEY`, `PROVIDER_NAME`, relayer/redis secrets, `DATABASE_PATH`, **`OZ_RELAYER_UID` / `OZ_RELAYER_GID`** (same as `id -u` / `id -g` for the user that owns `config/oz-relayer/keys/*`; required for `compose.prod.yaml`; on POSIX, `pnpm run prod:init` fills these when missing), and if using auth, `API_CLIENTS_JSON`.
 2. **`config/provider.json`** — start from `config/provider.example.json` or generate a Superfluid-wide template with `pnpm run provider:gen:superfluid`, then set `rpcUrls` and `macroPolicy` for your deployment.
 3. **Bootstrap:** `pnpm run prod:init` — secrets, keystore, and `config/oz-relayer/*` bootstrap files (see `config/oz-relayer/README.md`). Top up signer gas with **`pnpm run prod:fund`** (`SIMULATE=1` first).
-4. **Compose:** `docker compose -f compose.prod.yaml up -d --build`. Then **`pnpm run prod:apply-config`** to reconcile API-safe live OZ Relayer state with `provider.json` (no Redis wipe). Ensure `redis` and `oz-relayer` are up before apply.
-5. **Day-2 changes:** edit `provider.json`, run **`pnpm run prod:apply-config`** (`prod:apply-config:dry-run` to preview). This handles app policy/RPC changes and existing-network relayer updates. For changes that require OZ to re-import bootstrap files, run **`scripts/prod-apply-provider-config.sh`** on the prod machine.
+4. **Compose:** `docker compose -f compose.prod.yaml up -d redis oz-relayer`, then **`pnpm run prod:verify-oz-import`**, then **`pnpm run prod:apply-config`**, then start `app` (or use `scripts/prod-apply-provider-config.sh` for the full sequence).
+5. **Day-2 changes:** edit `provider.json`, run **`scripts/prod-apply-provider-config.sh`** (or `prod:verify-oz-import` then `prod:apply-config`). `prod:verify-oz-import` fails before the app starts if OZ did not import every expected network/relayer.
 6. **Verify:** `GET /healthz`, `GET /readyz`, relayer `/api/v1/ready`, smoke `GET /v1/capabilities` + `POST /v1/relay-executions` on a test chain.
 
 See [docs/operations.md](docs/operations.md) for the full config lifecycle and readiness runbook.

@@ -3,6 +3,7 @@ import type { DesiredOzState } from "../../scripts/lib/oz-desired-state.js";
 import { networkApiId } from "../../scripts/lib/oz-desired-state.js";
 import type { OzNetworkRecord } from "../../scripts/lib/oz-admin-client.js";
 import { OzAdminClient } from "../../scripts/lib/oz-admin-client.js";
+import { OzRelayerHttpError } from "../../src/relayer/errors.js";
 import { applyReconcilePlan, buildReconcilePlan } from "../../scripts/lib/oz-reconcile.js";
 
 function desiredOneChain(): DesiredOzState {
@@ -68,7 +69,9 @@ function mockClient(live: {
       }
       const slug = apiId.replace(/^evm:/, "");
       const net = networks.find((n) => n.network === slug || n.id === apiId);
-      if (!net) throw new Error("not found");
+      if (!net) {
+        throw new OzRelayerHttpError("not found", 404, `/api/v1/networks/${apiId}`);
+      }
       return net;
     }),
     updateNetworkRpcUrls: vi.fn(async () => ({})),
@@ -104,6 +107,25 @@ describe("buildReconcilePlan", () => {
     expect(plan.actions.map((a) => a.kind)).not.toContain("create_relayer");
     expect(plan.bootstrapRequiredChainIds).toEqual([31337]);
     expect(plan.missingRelayerChainIds).toHaveLength(0);
+  });
+
+  it("does not treat desired network as missing when listNetworks is truncated but direct GET succeeds", async () => {
+    const desired = desiredOneChain();
+    const client = mockClient({
+      networks: [],
+      relayers: [{ id: "anvil-relayer", network_type: "evm", network: "localhost-anvil" }],
+      networkById: {
+        "evm:localhost-anvil": {
+          id: "evm:localhost-anvil",
+          network: "localhost-anvil",
+          chain_id: 31337,
+          rpc_urls: [{ url: "http://anvil:8545", weight: 100 }],
+        },
+      },
+    });
+    const plan = await buildReconcilePlan(client, desired, { pauseRemovedRelayers: false });
+    expect(plan.actions.some((a) => a.kind === "bootstrap_required")).toBe(false);
+    expect(plan.actions.some((a) => a.kind === "noop")).toBe(true);
   });
 
   it("plans patch_network_rpc when rpc urls differ", async () => {

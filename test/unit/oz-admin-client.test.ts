@@ -34,6 +34,46 @@ describe("OzAdminClient", () => {
     });
   });
 
+  it("paginates listNetworks across pages", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/api/v1/networks?page=1")) {
+        const pageOne = Array.from({ length: 50 }, (_, index) => ({
+          id: `evm:page1-${index}`,
+          network: `page1-${index}`,
+          chain_id: index + 1,
+        }));
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: { items: pageOne },
+            error: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/v1/networks?page=2")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              items: [{ id: "evm:base-sepolia", network: "base-sepolia", chain_id: 84532 }],
+            },
+            error: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ success: false, data: null, error: "unexpected" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OzAdminClient("http://oz:8080", "test-api-key-32-characters-minimum", 5000);
+    const networks = await client.listNetworks();
+
+    expect(networks).toHaveLength(51);
+    expect(networks.at(-1)?.id).toBe("evm:base-sepolia");
+  });
+
   it("POSTs create relayer with expected body", async () => {
     const fetchMock = vi.fn(async () => {
       return new Response(

@@ -5,6 +5,7 @@
  *   pnpm run prod:apply-config [-- flags]
  *   pnpm run prod:apply-config -- --no-restart-app   # skip host app restart after apply
  *   pnpm run prod:check-config
+ *   pnpm run prod:verify-oz-import
  */
 import type { AdminScript } from "./lib/prod-compose-admin.js";
 import {
@@ -15,10 +16,10 @@ import {
   shouldRestartAppAfterApply,
 } from "./lib/prod-compose-admin.js";
 
-const SCRIPTS = new Set<AdminScript>(["apply-config", "check-config"]);
+const SCRIPTS = new Set<AdminScript>(["apply-config", "check-config", "verify-oz-import"]);
 
 function usage(): never {
-  console.error("Usage: prod-compose-admin.ts <apply-config|check-config> [-- flags]");
+  console.error("Usage: prod-compose-admin.ts <apply-config|check-config|verify-oz-import> [-- flags]");
   process.exit(1);
 }
 

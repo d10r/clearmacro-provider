@@ -6,6 +6,7 @@ import { loadRegistry } from "../../src/config/registry.js";
 import { OzRelayerClient } from "../../src/relayer/client.js";
 import type { DesiredOzState, OzEvmNetwork } from "./oz-desired-state.js";
 import { networkApiId, rpcUrlsToWeightedPayload } from "./oz-desired-state.js";
+import { OzRelayerHttpError } from "../../src/relayer/errors.js";
 import { OzAdminClient, type OzNetworkRecord } from "./oz-admin-client.js";
 
 export type ReconcileActionKind =
@@ -51,9 +52,16 @@ function rpcUrlsEqual(desired: readonly string[], live: readonly string[]): bool
   return true;
 }
 
-function findLiveNetworkBySlug(networks: OzNetworkRecord[], slug: string): OzNetworkRecord | undefined {
+async function getDesiredLiveNetwork(client: OzAdminClient, slug: string): Promise<OzNetworkRecord | null> {
   const apiId = networkApiId(slug);
-  return networks.find((n) => n.id === apiId || n.network === slug);
+  try {
+    return await client.getNetwork(apiId);
+  } catch (error) {
+    if (error instanceof OzRelayerHttpError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 type LiveRelayerOnChain = {
@@ -112,7 +120,6 @@ export async function buildReconcilePlan(
   const actions: ReconcileAction[] = [];
   const bootstrapRequiredChainIds: number[] = [];
   const desiredChainIds = new Set(desired.networks.map((n) => n.chain_id));
-  const liveNetworks = await client.listNetworks();
   const liveRelayerIds = await client.listRelayerIds();
   const liveRelayersByChainId = await indexLiveRelayersByChainId(client, liveRelayerIds);
   /** Active relayer ids per chain (for pause-removed and plan summary). */
@@ -124,7 +131,7 @@ export async function buildReconcilePlan(
   for (const oz of desired.networks) {
     const chainId = oz.chain_id;
     const apiId = networkApiId(oz.network);
-    const liveNet = findLiveNetworkBySlug(liveNetworks, oz.network);
+    const liveNet = await getDesiredLiveNetwork(client, oz.network);
     const desiredRelayerId = desired.relayerIdByChainId.get(chainId)!;
 
     if (!liveNet) {

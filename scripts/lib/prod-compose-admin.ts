@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 
-export type AdminScript = "apply-config" | "check-config";
+export type AdminScript = "apply-config" | "check-config" | "verify-oz-import";
 
 const SCRIPT_FILE: Record<AdminScript, string> = {
   "apply-config": "dist/scripts/prod-apply-config.js",
   "check-config": "dist/scripts/prod-check-config.js",
+  "verify-oz-import": "dist/scripts/prod-verify-oz-import.js",
 };
 
 export function resolveComposeProdFile(): string {

@@ -126,12 +126,36 @@ export class OzAdminClient {
   }
 
   async listNetworks(): Promise<OzNetworkRecord[]> {
-    const envelope = await this.call<OzEnvelope<unknown>>("/api/v1/networks", { method: "GET" });
-    if (!envelope.success) {
-      throw new Error(`OZ list networks failed: ${envelope.error ?? "unknown error"}`);
+    const networks: OzNetworkRecord[] = [];
+    const seen = new Set<string>();
+    let page = 1;
+    const limit = 50;
+    while (true) {
+      const envelope = await this.call<OzEnvelope<unknown>>(`/api/v1/networks?page=${page}&limit=${limit}`, {
+        method: "GET",
+      });
+      if (!envelope.success || envelope.data === null || envelope.data === undefined) {
+        break;
+      }
+      const batch = extractListPayload(envelope.data).filter(
+        (item): item is OzNetworkRecord => typeof item === "object" && item !== null,
+      ) as OzNetworkRecord[];
+      if (batch.length === 0) {
+        break;
+      }
+      for (const item of batch) {
+        const id = item.id ?? item.network ?? "";
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          networks.push(item);
+        }
+      }
+      if (batch.length < limit) {
+        break;
+      }
+      page += 1;
     }
-    const items = extractListPayload(envelope.data);
-    return items.filter((item): item is OzNetworkRecord => typeof item === "object" && item !== null) as OzNetworkRecord[];
+    return networks;
   }
 
   async getNetwork(networkApiId: string): Promise<OzNetworkRecord> {

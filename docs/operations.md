@@ -83,10 +83,15 @@ At startup, the app queries OpenZeppelin Relayer and binds exactly one active re
 | Any later config change | Edit `provider.json`, then `pnpm run prod:apply-config` |
 | Preview config apply actions | `pnpm run prod:apply-config:dry-run` |
 | Check live vs desired drift | `pnpm run prod:check-config` |
+| Verify live OZ import before starting app | `pnpm run prod:verify-oz-import` |
 | Validate local prod config files, generated OZ files, and signer balances | `pnpm run prod:validate` |
 | Manual provider config apply wrapper | `scripts/prod-apply-provider-config.sh` |
 
 **`prod:init`** is idempotent bootstrap only: it does not rotate secrets or apply changes to live Redis-backed OZ state after first boot.
+
+**`prod:validate`** checks local files only (env, generated `config/oz-relayer/*`, signer balances). It does **not** query live OZ Redis/API state.
+
+**`prod:verify-oz-import`** is the explicit live OZ gate: for every chain in `provider.json`, it `GET`s the expected network and relayer directly (not paginated list endpoints), prints precise mismatches (missing network, wrong `chain_id`, RPC drift, paused/`system_disabled` relayer), then runs the same relayer binding check the app performs at startup. Run this after `redis` + `oz-relayer` are up and **before** starting/restarting `app`.
 
 **`prod:apply-config`** reconciles the API-safe parts of live OZ state via the internal admin API: patch existing network RPC URLs, create/update relayers for existing networks, optionally pause removed relayers, validate relayer binding, update bootstrap files for audit, then the host wrapper restarts the app (unless `--no-restart-app`, which is host-only and not passed into the admin container). Its dry run previews the planned live OZ mutations and generated-file updates without applying them. Requires `redis` and `oz-relayer` to be running; runs the `admin` Compose profile job against `http://oz-relayer:8080`. If apply fails with a connection error, check `docker compose -f compose.prod.yaml ps` and `logs oz-relayer`.
 
@@ -94,7 +99,7 @@ At startup, the app queries OpenZeppelin Relayer and binds exactly one active re
 - **OZ RPCs:** `networks/evm.json` uses the `rpcUrls` entries from `provider.json` as the operator-curated RPC list. Keep every listed URL production-grade; bad public fallbacks can make OZ system-disable relayers during health checks.
 - **Add chain:** if the OZ network already exists, `prod:apply-config` can create/update the relayer. If the OZ network is missing, the command stops with `bootstrap_required`; OZ v1.4 imports new networks from bootstrap files, not from a live create-network API. Regenerate `config/oz-relayer/networks/evm.json` and run the OZ Redis re-import/maintenance workflow for that change.
 - **Remove chain:** app stops serving the chain after restart; OZ relayers are left as-is by default. Use `--pause-removed-relayers` to pause orphans.
-- **Manual wrapper:** `scripts/prod-apply-provider-config.sh` first runs the API-safe apply path. If OZ reports `bootstrap_required`, it asks before removing only the OZ Redis volume, then starts Redis/OZ, checks/applies drift, and starts the app.
+- **Manual wrapper:** `scripts/prod-apply-provider-config.sh` runs `prod:init`, starts `redis` + `oz-relayer`, runs **`prod:verify-oz-import`** (fails fast with per-chain diagnostics), then `prod:apply-config`, then starts `app`. If verification reports missing import or apply hits `bootstrap_required` / `system-disabled`, it asks before removing only the OZ Redis volume and re-importing.
 - **Emergency reset:** `docker compose -f compose.prod.yaml down` and remove volume `clearmacro-provider_oz-redis-data` only for pre-prod or break-glass (drops in-flight relayer queue state). Do not use `RESET_STORAGE_ON_START=true` in normal operations.
 
 ## Relayer signer gas

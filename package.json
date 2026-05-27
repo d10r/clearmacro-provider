@@ -30,6 +30,7 @@
     "prod:apply-config": "tsx scripts/prod-compose-admin.ts apply-config",
     "prod:apply-config:dry-run": "tsx scripts/prod-compose-admin.ts apply-config --dry-run",
     "prod:check-config": "tsx scripts/prod-compose-admin.ts check-config",
+    "prod:verify-oz-import": "tsx scripts/prod-compose-admin.ts verify-oz-import",
     "prod:validate": "tsx scripts/prod-validate.ts",
     "prod:fund": "tsx scripts/prod-fund-signer.ts",
     "provider:gen:superfluid": "tsx scripts/generate-registry-superfluid.ts",

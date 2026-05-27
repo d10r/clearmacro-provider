@@ -23,10 +23,15 @@ Usage: scripts/prod-apply-provider-config.sh [--yes] [--reimport-oz]
 
 Apply config/provider.json changes on the production machine.
 
-The normal path runs the API-safe apply without wiping Redis. If OZ reports
-bootstrap_required for a new network, the script asks before wiping only the
-OpenZeppelin Relayer Redis volume and re-importing the generated bootstrap
-files. Use --reimport-oz to skip the first non-destructive attempt.
+Flow:
+  1. Regenerate OZ bootstrap files (prod:init)
+  2. Ensure redis + oz-relayer are running
+  3. Verify live OZ import (prod:verify-oz-import) — fails before app starts
+  4. Apply API-safe drift (prod:apply-config)
+  5. Start/restart app
+
+If OZ import verification fails, the script may offer a guarded OZ Redis re-import.
+Use --reimport-oz to skip the first non-destructive attempt and re-import immediately.
 EOF
       exit 0
       ;;
@@ -49,6 +54,22 @@ confirm_reimport() {
   fi
 }
 
+wait_for_oz_relayer() {
+  echo "== Wait for OZ Relayer to finish boot/import =="
+  sleep 8
+}
+
+run_oz_gate_and_apply() {
+  echo "== Verify live OZ import matches provider.json =="
+  pnpm run prod:verify-oz-import
+
+  echo "== Apply API-safe config drift (no app restart yet) =="
+  pnpm run prod:apply-config -- --no-restart-app
+
+  echo "== Start app =="
+  docker compose -f "$COMPOSE_FILE" up -d --build app
+}
+
 run_reimport() {
   confirm_reimport
 
@@ -63,15 +84,13 @@ run_reimport() {
 
   echo "== Start Redis and OZ Relayer for config import =="
   docker compose -f "$COMPOSE_FILE" up -d redis oz-relayer
+  wait_for_oz_relayer
 
-  echo "== Check live OZ state against provider.json =="
-  pnpm run prod:check-config
+  run_oz_gate_and_apply
+}
 
-  echo "== Apply API-safe config drift without restarting app yet =="
-  pnpm run prod:apply-config -- --no-restart-app
-
-  echo "== Start app =="
-  docker compose -f "$COMPOSE_FILE" up -d --build app
+reimport_required_from_log() {
+  grep -Eq "bootstrap_required|system-disabled|OZ import mismatch" "$1"
 }
 
 if [[ "$FORCE_REIMPORT" == true ]]; then
@@ -82,17 +101,20 @@ else
 
   echo "== Ensure Redis and OZ Relayer are running =="
   docker compose -f "$COMPOSE_FILE" up -d redis oz-relayer
+  wait_for_oz_relayer
 
-  echo "== Apply API-safe config changes =="
-  apply_log="$(mktemp)"
-  if pnpm run prod:apply-config |& tee "$apply_log"; then
-    rm -f "$apply_log"
-  elif grep -q "bootstrap_required" "$apply_log"; then
-    rm -f "$apply_log"
-    echo "OZ reported bootstrap_required. A Redis re-import is required for this provider.json change."
+  gate_log="$(mktemp)"
+  if run_oz_gate_and_apply >"$gate_log" 2>&1; then
+    cat "$gate_log"
+    rm -f "$gate_log"
+  elif reimport_required_from_log "$gate_log"; then
+    cat "$gate_log"
+    rm -f "$gate_log"
+    echo "OZ import verification or apply failed; a Redis re-import may be required."
     run_reimport
   else
-    rm -f "$apply_log"
+    cat "$gate_log"
+    rm -f "$gate_log"
     exit 1
   fi
 fi
