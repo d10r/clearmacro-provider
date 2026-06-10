@@ -40,13 +40,22 @@ describe("loadEnv", () => {
     expect(loadEnv().relayerSignerBalanceSampleIntervalMs).toBe(0);
   });
 
-  it("fails on missing required values", () => {
+  it("defaults database path when unset", () => {
     delete process.env.DATABASE_PATH;
     process.env.OZ_RELAYER_URL = "http://localhost:8080";
     process.env.OZ_RELAYER_API_KEY = "token";
     process.env.PROVIDER_NAME = "macros.superfluid.eth";
     process.env.API_AUTH_ENABLED = "false";
-    expect(() => loadEnv()).toThrow("DATABASE_PATH");
+    expect(loadEnv().databasePath).toBe("./data/clearmacro-provider-dev.sqlite");
+  });
+
+  it("fails on missing required values", () => {
+    process.env.DATABASE_PATH = ":memory:";
+    delete process.env.OZ_RELAYER_URL;
+    process.env.OZ_RELAYER_API_KEY = "token";
+    process.env.PROVIDER_NAME = "macros.superfluid.eth";
+    process.env.API_AUTH_ENABLED = "false";
+    expect(() => loadEnv()).toThrow("OZ_RELAYER_URL");
   });
 });
 
