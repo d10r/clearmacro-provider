@@ -5,11 +5,14 @@ import {
   createWalletClient,
   http,
   keccak256,
+  toBytes,
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { preflightRunMacro } from "../../src/chain/readiness.js";
+import { preflightRunMacro, preflightRunPermit2AndMacro } from "../../src/chain/readiness.js";
+import { buildPermit2Context } from "../../src/chain/permit2.js";
 import fixtureArtifact from "../fixtures/contracts/out/RelayerLikePreflightForwarder.sol/RelayerLikePreflightForwarder.json" with { type: "json" };
+import permit2FixtureArtifact from "../fixtures/contracts/out/RelayerLikePermit2PreflightForwarder.sol/RelayerLikePermit2PreflightForwarder.json" with { type: "json" };
 
 const rpcUrl = "http://127.0.0.1:18545";
 const chain = {
@@ -124,5 +127,88 @@ describe("preflight contract-backed integration", () => {
         account: other.address,
       }),
     ).rejects.toThrow(/UnauthorizedSender|execution reverted/i);
+  });
+
+  it("matches relayer-relevant Permit2 preflight conditions and succeeds for valid input", async () => {
+    const relayerSigner = privateKeyToAccount(
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    );
+    const requestSigner = privateKeyToAccount(
+      "0x59c6995e998f97a5a0044966f094538e7d0f90a33f6f8f6b4a9f4f8f8a8c5d20",
+    );
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account: relayerSigner });
+
+    const macro = "0x00000000000000000000000000000000000000bb" as Address;
+    const encodedPayload = "0x5678";
+    const signature = "0xabcd";
+    const witness = `0x${"ee".repeat(32)}` as `0x${string}`;
+    const witnessTypeString = "witness-type-for-preflight";
+    const msgValue = 0n;
+
+    const deployHash = await walletClient.deployContract({
+      abi: permit2FixtureArtifact.abi,
+      bytecode: permit2FixtureArtifact.bytecode.object as `0x${string}`,
+      args: [
+        macro,
+        relayerSigner.address,
+        requestSigner.address,
+        witness,
+        keccak256(toBytes(witnessTypeString)),
+        keccak256(signature),
+        keccak256(encodedPayload),
+        msgValue,
+      ],
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: deployHash });
+    const forwarder = receipt.contractAddress as Address;
+
+    const permit2Context = buildPermit2Context({
+      permit2: {
+        permit: {
+          permitted: { token: "0x00000000000000000000000000000000000000cc", amount: "1" },
+          nonce: "1",
+          deadline: "9999999999",
+        },
+        spender: "0x00000000000000000000000000000000000000dd",
+        upgradeSuperToken: "0x0000000000000000000000000000000000000000",
+        signature,
+      },
+      owner: requestSigner.address,
+      witness,
+      witnessTypeString,
+    });
+
+    const chainConfig = {
+      chainId: 31337,
+      forwarderAddress: forwarder,
+      rpcUrls: [rpcUrl],
+      macroPolicy: { mode: "allowlist" as const, allowedMacros: [{ domain: "anvil-test", address: macro }] },
+    };
+
+    const ok = await preflightRunPermit2AndMacro({
+      chain: chainConfig,
+      forwarder,
+      macro,
+      encodedPayload,
+      relayerSigner: relayerSigner.address,
+      permit2Context,
+      msgValue: msgValue.toString(),
+    });
+    expect(ok).toBe("ok");
+
+    const wrongWitness = await preflightRunPermit2AndMacro({
+      chain: chainConfig,
+      forwarder,
+      macro,
+      encodedPayload,
+      relayerSigner: relayerSigner.address,
+      permit2Context: {
+        ...permit2Context,
+        witness: `0x${"ff".repeat(32)}`,
+      },
+      msgValue: msgValue.toString(),
+    });
+    expect(wrongWitness).toBe("deterministic_revert");
   });
 });

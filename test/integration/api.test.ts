@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createReadyzReadinessCache } from "../../src/chain/readinessCache.js";
 import { createTestHarness } from "../fixtures/harness.js";
-import { buildClearMacroParams, buildRelayPayload } from "../fixtures/relay-fixtures.js";
+import { buildClearMacroParams, buildPermit2RelayPayload, buildPermit2Request, buildRelayPayload } from "../fixtures/relay-fixtures.js";
 
 function bearer(token: string): { authorization: string } {
   return { authorization: `Bearer ${token}` };
@@ -333,6 +333,7 @@ describe("API integration", () => {
         chainId: number;
         forwarderAddress: string;
         macroPolicy: { mode: "allowlist"; allowedMacros: Array<{ domain: string; address: string }> };
+        supportedKinds: string[];
       }>;
     }>();
     expect(body.providerName).toBe("macros.superfluid.eth");
@@ -342,6 +343,10 @@ describe("API integration", () => {
       mode: "allowlist",
       allowedMacros: [{ domain: "test", address: "0x0000000000000000000000000000000000000002" }],
     });
+    expect(body.chains[0]?.supportedKinds).toEqual([
+      "clearMacroV1",
+      "clearMacroPermit2V1",
+    ]);
   });
 
   it("enforces auth token when auth is enabled", async () => {
@@ -398,5 +403,274 @@ describe("API integration", () => {
       outcome_code: string;
     };
     expect(row.outcome_code).toBe("SIGNATURE_INVALID");
+  });
+
+  it("accepts valid clearMacroPermit2V1 request and returns pending execution", async () => {
+    const { app } = await createTestHarness();
+    const payload = await buildPermit2RelayPayload();
+    const created = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(created.statusCode).toBe(202);
+    const body = created.json<{ kind: string; state: string }>();
+    expect(body.kind).toBe("clearMacroPermit2V1");
+    expect(body.state).toBe("pending");
+    expect(JSON.stringify(body)).not.toContain(payload.permit2.signature);
+  });
+
+  it("replays identical Permit2 signed intent with 200 for same caller", async () => {
+    const { app } = await createTestHarness();
+    const payload = await buildPermit2RelayPayload();
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    const second = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(200);
+    expect(first.json<{ id: string }>().id).toBe(second.json<{ id: string }>().id);
+  });
+
+  it("rejects invalid Permit2 signature", async () => {
+    const { app } = await createTestHarness({ validateRelaySignature: async () => false });
+    const payload = await buildPermit2RelayPayload();
+    const response = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("SIGNATURE_INVALID");
+  });
+
+  it("rejects implied-upgrade Permit2 when spender is not the forwarder", async () => {
+    const { app } = await createTestHarness();
+    const payload = await buildPermit2RelayPayload({
+      permit2: buildPermit2Request({
+        spender: "0x0000000000000000000000000000000000000099",
+        upgradeSuperToken: "0x00000000000000000000000000000000000000aa",
+      }),
+    });
+    const response = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("allows two Permit2 requests with the same payload when Permit2 nonce differs", async () => {
+    const { app } = await createTestHarness({
+      getPermit2WitnessStructHash: async (input) =>
+        `0x${createHash("sha256").update(input.upgradeSuperToken).digest("hex").slice(0, 64)}`,
+    });
+    const first = await buildPermit2RelayPayload();
+    const second = await buildPermit2RelayPayload({
+      permit2: {
+        ...first.permit2,
+        permit: { ...first.permit2.permit, nonce: "124" },
+        signature: "0x5678",
+      },
+    });
+    const a = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: first });
+    const b = await app.inject({ method: "POST", url: "/v1/relay-executions", payload: second });
+    expect(a.statusCode).toBe(202);
+    expect(b.statusCode).toBe(202);
+    expect(a.json<{ id: string }>().id).not.toBe(b.json<{ id: string }>().id);
+  });
+
+  it("returns 409 DUPLICATE_EXECUTION for Permit2 digest across authenticated clients", async () => {
+    const tokA = "permit2-token-a";
+    const tokB = "permit2-token-b";
+    const app = (
+      await createTestHarness({
+        env: {
+          apiAuthEnabled: true,
+          apiClients: [
+            { id: "client-a", apiTokenHash: createHash("sha256").update(tokA).digest("hex").toLowerCase() },
+            { id: "client-b", apiTokenHash: createHash("sha256").update(tokB).digest("hex").toLowerCase() },
+          ],
+        },
+      })
+    ).app;
+    const payload = await buildPermit2RelayPayload();
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokA) });
+    expect(first.statusCode).toBe(202);
+    const dup = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokB) });
+    expect(dup.statusCode).toBe(409);
+    const err = dup.json<{ error: { code: string; executionId: string | null } }>().error;
+    expect(err.code).toBe("DUPLICATE_EXECUTION");
+    expect(err.executionId).toBeNull();
+  });
+
+  it("maps Permit2 witness derivation RPC failures to 503 chain unavailable", async () => {
+    const witnessFail = await createTestHarness({
+      getPermit2WitnessStructHash: async () => {
+        throw new Error("RPC down");
+      },
+    });
+    const witnessResponse = await witnessFail.app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload(),
+    });
+    expect(witnessResponse.statusCode).toBe(503);
+    expect(witnessResponse.json<{ error: { code: string } }>().error.code).toBe("CHAIN_UNAVAILABLE");
+
+    const typeFail = await createTestHarness({
+      getPermit2WitnessTypeString: async () => {
+        throw new Error("RPC down");
+      },
+    });
+    const typeResponse = await typeFail.app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload(),
+    });
+    expect(typeResponse.statusCode).toBe(503);
+    expect(typeResponse.json<{ error: { code: string } }>().error.code).toBe("CHAIN_UNAVAILABLE");
+  });
+
+  it("maps Permit2 domain separator RPC failures to 503 chain unavailable", async () => {
+    const { app } = await createTestHarness({
+      getPermit2DomainSeparator: async () => {
+        throw new Error("RPC down");
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload(),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("CHAIN_UNAVAILABLE");
+  });
+
+  it("maps Permit2 signature validation RPC failures to 503 chain unavailable", async () => {
+    const { app } = await createTestHarness({
+      validateRelaySignature: async () => {
+        throw new Error("RPC down");
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload(),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("CHAIN_UNAVAILABLE");
+  });
+
+  it("does not bypass Permit2 signature validation when force is true", async () => {
+    const { app } = await createTestHarness({
+      preflightRunPermit2AndMacro: async () => "deterministic_revert",
+      validateRelaySignature: async () => false,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({ forceExecuteAfterPreflightRevert: true }),
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("SIGNATURE_INVALID");
+  });
+
+  it("returns 202 pending when Permit2 preflight reverts and force is true", async () => {
+    const { app } = await createTestHarness({
+      preflightRunPermit2AndMacro: async () => "deterministic_revert",
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({ forceExecuteAfterPreflightRevert: true }),
+    });
+    expect(response.statusCode).toBe(202);
+    const body = response.json<{ state: string; metadata: Record<string, string> }>();
+    expect(body.state).toBe("pending");
+    expect(body.metadata.forceSubmittedAfterPreflightRevert).toBe("true");
+  });
+
+  it("witness-only Permit2 accepts arbitrary spender when upgradeSuperToken is zero", async () => {
+    const { app } = await createTestHarness();
+    const payload = await buildPermit2RelayPayload({
+      permit2: buildPermit2Request({
+        spender: "0x0000000000000000000000000000000000009999",
+        upgradeSuperToken: "0x0000000000000000000000000000000000000000",
+      }),
+    });
+    const response = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it("open mode accepts Permit2 request for non-allowlisted macro", async () => {
+    const { app } = await createTestHarness({ macroPolicyMode: "open" });
+    const macroAddress = "0x0000000000000000000000000000000000000003" as const;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({
+        macroAddress,
+        payload: buildClearMacroParams({ domain: "any.domain", macroContract: macroAddress }) as `0x${string}`,
+      }),
+    });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it("open mode still rejects Permit2 macro mismatch between request and payload", async () => {
+    const { app } = await createTestHarness({ macroPolicyMode: "open" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({
+        macroAddress: "0x0000000000000000000000000000000000000003",
+        payload: buildClearMacroParams({
+          domain: "any.domain",
+          macroContract: "0x0000000000000000000000000000000000000002",
+        }) as `0x${string}`,
+      }),
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("INVALID_CLEAR_MACRO_PAYLOAD");
+  });
+
+  it("rejects clearMacroPermit2V1 schema violations", async () => {
+    const { app } = await createTestHarness();
+    const base = await buildPermit2RelayPayload();
+
+    const withTopLevelSignature = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: { ...base, signature: "0x1234" },
+    });
+    expect(withTopLevelSignature.statusCode).toBe(400);
+
+    const missingPermit2 = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: { kind: "clearMacroPermit2V1", chainId: base.chainId, macroAddress: base.macroAddress, signerAddress: base.signerAddress, payload: base.payload },
+    });
+    expect(missingPermit2.statusCode).toBe(400);
+
+    const clearMacroWithPermit2 = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: { ...(await buildRelayPayload()), permit2: base.permit2 },
+    });
+    expect(clearMacroWithPermit2.statusCode).toBe(400);
+
+    const badAddress = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({
+        permit2: buildPermit2Request({ token: "0xnot-an-address" as `0x${string}` }),
+      }),
+    });
+    expect(badAddress.statusCode).toBe(400);
+
+    const badAmount = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({
+        permit2: buildPermit2Request({ amount: "1.5" }),
+      }),
+    });
+    expect(badAmount.statusCode).toBe(400);
+
+    const badSignature = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload({
+        permit2: buildPermit2Request({ signature: "not-hex" as `0x${string}` }),
+      }),
+    });
+    expect(badSignature.statusCode).toBe(400);
   });
 });

@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createTestHarness } from "../fixtures/harness.js";
-import { buildClearMacroParams, buildRelayPayload } from "../fixtures/relay-fixtures.js";
+import { decodeFunctionData } from "viem";
+import { clearMacroForwarderV1Abi } from "../../src/chain/clearMacroForwarderV1Abi.js";
 import { processRelayerWorkerTick } from "../../src/relayer/worker.js";
 import type { OzRelayerClient } from "../../src/relayer/client.js";
+import { createTestHarness } from "../fixtures/harness.js";
+import { buildClearMacroParams, buildPermit2RelayPayload, buildRelayPayload } from "../fixtures/relay-fixtures.js";
+import { buildPermit2Context } from "../../src/chain/permit2.js";
 
-function relayerClientFullSuccess(): OzRelayerClient {
+function relayerClientFullSuccess(capture?: { submittedData?: string }): OzRelayerClient {
   const hash = `0x${"cd".repeat(32)}`;
   const tx = {
     id: "oz-e2e-1",
@@ -48,12 +51,32 @@ function relayerClientFullSuccess(): OzRelayerClient {
       network_type: "evm",
       required_confirmations: 1,
     }),
-    submitTransaction: async () => ({
-      ...tx,
-      status: "submitted",
-      confirmed_at: null,
-      receipt: null,
-    }),
+    submitTransaction: async (_id: string, submit: { data: string; to: string; value?: string }) => {
+      if (capture) {
+        capture.submittedData = submit.data;
+      }
+      return {
+        id: "oz-e2e-1",
+        hash,
+        status: "submitted",
+        status_reason: null,
+        created_at: new Date().toISOString(),
+        sent_at: new Date().toISOString(),
+        confirmed_at: null,
+        gas_price: "1",
+        gas_limit: 21000,
+        nonce: 1,
+        value: submit.value ?? "0",
+        from: `0x${"aa".repeat(20)}`,
+        to: submit.to,
+        relayer_id: "relayer-main",
+        data: submit.data,
+        max_fee_per_gas: null,
+        max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
+      };
+    },
     getTransaction: async () => tx,
   } as unknown as OzRelayerClient;
 }
@@ -141,6 +164,55 @@ describe("E2E relay API", () => {
     });
 
     const final = await harness.app.inject({ method: "GET", url: `/v1/relay-executions/${id}` });
+    expect(final.statusCode).toBe(200);
+    const body = final.json<{ state: string; terminal: boolean; receipt?: { status: string } }>();
+    expect(body.state).toBe("succeeded");
+    expect(body.terminal).toBe(true);
+    expect(body.receipt?.status).toBe("success");
+  });
+
+  it("journey: Permit2 POST → worker tick → runPermit2AndMacro calldata → GET terminal succeeded", async () => {
+    const capture: { submittedData?: string } = {};
+    const relayer = relayerClientFullSuccess(capture);
+    const harness = await createTestHarness({ relayerClient: relayer });
+    const post = await harness.app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildPermit2RelayPayload(),
+    });
+    expect(post.statusCode).toBe(202);
+    const created = post.json<{ id: string; state: string; kind: string }>();
+    expect(created.state).toBe("pending");
+    expect(created.kind).toBe("clearMacroPermit2V1");
+
+    await processRelayerWorkerTick({
+      executions: harness.executions,
+      executionEvents: harness.executionEvents,
+      relayerTransactions: harness.relayerTransactions,
+      relayerClient: relayer,
+      registry: harness.registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+      resolvePermit2Context: async ({ permit2, owner }) =>
+        buildPermit2Context({
+          permit2,
+          owner,
+          witness: `0x${"22".repeat(32)}`,
+          witnessTypeString: "witness-type",
+        }),
+    });
+
+    expect(capture.submittedData).toBeDefined();
+    const decoded = decodeFunctionData({
+      abi: clearMacroForwarderV1Abi,
+      data: capture.submittedData as `0x${string}`,
+    });
+    expect(decoded.functionName).toBe("runPermit2AndMacro");
+
+    const final = await harness.app.inject({
+      method: "GET",
+      url: `/v1/relay-executions/${created.id}`,
+    });
     expect(final.statusCode).toBe(200);
     const body = final.json<{ state: string; terminal: boolean; receipt?: { status: string } }>();
     expect(body.state).toBe("succeeded");

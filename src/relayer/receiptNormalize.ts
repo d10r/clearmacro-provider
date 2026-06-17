@@ -16,6 +16,12 @@ export type NormalizedReceipt = {
 
 function normalizeStatus(status: string | number | bigint): "success" | "reverted" {
   const s = typeof status === "bigint" ? status.toString() : String(status).toLowerCase();
+  if (s === "success" || s === "succeeded") {
+    return "success";
+  }
+  if (s === "reverted" || s === "failed" || s === "revert") {
+    return "reverted";
+  }
   if (s === "0" || s === "0x0" || s === "false") {
     return "reverted";
   }

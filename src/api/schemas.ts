@@ -49,78 +49,149 @@ export const ReadyzResponseSchema = Type.Object({
   ),
 });
 
-export const CreateRelayExecutionRequestSchema = Type.Object(
+const SharedCreateRelayFields = {
+  chainId: Type.Integer({
+    minimum: 1,
+    description:
+      "EVM chain ID for the ClearMacro payload and configured provider forwarder.",
+  }),
+  macroAddress: Type.Unsafe<typeof Address>({
+    ...Address,
+    description:
+      "ClearMacro contract address. Must match `payload.security.macroContract` after decoding.",
+  }),
+  signerAddress: Type.Unsafe<typeof Address>({
+    ...Address,
+    description:
+      "Address that signed the relay authorization. EOAs and ERC-1271 contract signers are supported.",
+  }),
+  payload: Type.Unsafe<typeof Bytes>({
+    ...Bytes,
+    description:
+      "ABI-encoded `IClearMacroForwarderV1.Payload` (`encodedPayload` onchain). The provider decodes it to validate macro contract, provider name, domain, nonce, and validity window.",
+  }),
+  value: Type.Optional(
+    Type.Unsafe<typeof UintString>({
+      ...UintString,
+      description:
+        "Native token value to pass to the forwarder call; defaults to `0` when omitted.",
+    }),
+  ),
+  forceExecuteAfterPreflightRevert: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, a deterministic preflight revert can still create a pending execution. This does not bypass auth, policy, signature, validity, readiness, or payload validation.",
+    }),
+  ),
+  clientRequestId: Type.Optional(
+    Type.String({
+      description:
+        "Optional dapp correlation ID. It is echoed on the execution resource but is not used for deduplication.",
+    }),
+  ),
+  metadata: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description:
+        "Optional dapp-provided correlation data. Do not include secrets.",
+    }),
+  ),
+};
+
+const Permit2RequestSchema = Type.Object(
   {
-    kind: Type.Literal("clearMacroV1", {
-      description: "Relay kind supported by this API version.",
-    }),
-    chainId: Type.Integer({
-      minimum: 1,
-      description:
-        "EVM chain ID for the ClearMacro payload and configured provider forwarder.",
-    }),
-    macroAddress: Type.Unsafe<typeof Address>({
+    permit: Type.Object(
+      {
+        permitted: Type.Object(
+          {
+            token: Type.Unsafe<typeof Address>({ ...Address }),
+            amount: Type.Unsafe<typeof UintString>({ ...UintString }),
+          },
+          { additionalProperties: false },
+        ),
+        nonce: Type.Unsafe<typeof UintString>({ ...UintString }),
+        deadline: Type.Unsafe<typeof UintString>({ ...UintString }),
+      },
+      { additionalProperties: false },
+    ),
+    spender: Type.Unsafe<typeof Address>({ ...Address }),
+    upgradeSuperToken: Type.Unsafe<typeof Address>({
       ...Address,
       description:
-        "ClearMacro contract address. Must match `payload.security.macroContract` after decoding.",
-    }),
-    signerAddress: Type.Unsafe<typeof Address>({
-      ...Address,
-      description:
-        "Address that signed the resolved forwarder digest. EOAs and ERC-1271 contract signers are supported.",
-    }),
-    payload: Type.Unsafe<typeof Bytes>({
-      ...Bytes,
-      description:
-        "ABI-encoded `IClearMacroForwarderV1.Payload` (`encodedPayload` onchain). The provider decodes it to validate macro contract, provider name, domain, nonce, and validity window.",
+        "Wrapper SuperToken for implied upgrade, or the zero address for witness-only mode.",
     }),
     signature: Type.Unsafe<typeof Bytes>({
       ...Bytes,
-      description:
-        "Signature over `ClearMacroForwarderV1.getDigest(m, encodedPayload)`; request `macroAddress` is the macro contract (`m`).",
+      description: "Permit2 witness-transfer signature authorizing the relay.",
     }),
-    value: Type.Optional(
-      Type.Unsafe<typeof UintString>({
-        ...UintString,
-        description:
-          "Native token value to pass to `runMacro`; defaults to `0` when omitted.",
-      }),
-    ),
-    forceExecuteAfterPreflightRevert: Type.Optional(
-      Type.Boolean({
-        description:
-          "When true, a deterministic preflight revert can still create a pending execution. This does not bypass auth, policy, signature, validity, readiness, or payload validation.",
-      }),
-    ),
-    clientRequestId: Type.Optional(
-      Type.String({
-        description:
-          "Optional dapp correlation ID. It is echoed on the execution resource but is not used for deduplication.",
-      }),
-    ),
-    metadata: Type.Optional(
-      Type.Record(Type.String(), Type.String(), {
-        description:
-          "Optional dapp-provided correlation data. Do not include secrets.",
-      }),
-    ),
   },
-  {
-    examples: [
-      {
-        kind: "clearMacroV1",
-        chainId: 11155420,
-        macroAddress: "0x1111111111111111111111111111111111111111",
-        signerAddress: "0x2222222222222222222222222222222222222222",
-        payload: "0x1234",
-        signature: "0xabcdef",
-        value: "0",
-        clientRequestId: "dashboard-transaction-123",
-        metadata: { source: "dashboard" },
-      },
-    ],
-  },
+  { additionalProperties: false },
 );
+
+export const CreateRelayExecutionRequestSchema = Type.Union([
+  Type.Object(
+    {
+      kind: Type.Literal("clearMacroV1", {
+        description: "Relay via `runMacro` with a ClearMacro digest signature.",
+      }),
+      ...SharedCreateRelayFields,
+      signature: Type.Unsafe<typeof Bytes>({
+        ...Bytes,
+        description:
+          "Signature over `ClearMacroForwarderV1.getDigest(m, encodedPayload)`; request `macroAddress` is the macro contract (`m`).",
+      }),
+    },
+    {
+      additionalProperties: false,
+      examples: [
+        {
+          kind: "clearMacroV1",
+          chainId: 11155420,
+          macroAddress: "0x1111111111111111111111111111111111111111",
+          signerAddress: "0x2222222222222222222222222222222222222222",
+          payload: "0x1234",
+          signature: "0xabcdef",
+          value: "0",
+        },
+      ],
+    },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("clearMacroPermit2V1", {
+        description:
+          "Relay via `runPermit2AndMacro` with a Permit2 witness signature.",
+      }),
+      ...SharedCreateRelayFields,
+      permit2: Permit2RequestSchema,
+    },
+    {
+      additionalProperties: false,
+      examples: [
+        {
+          kind: "clearMacroPermit2V1",
+          chainId: 11155420,
+          macroAddress: "0x1111111111111111111111111111111111111111",
+          signerAddress: "0x2222222222222222222222222222222222222222",
+          payload: "0x1234",
+          permit2: {
+            permit: {
+              permitted: {
+                token: "0x3333333333333333333333333333333333333333",
+                amount: "1000000",
+              },
+              nonce: "123",
+              deadline: "1760000000",
+            },
+            spender: "0x4444444444444444444444444444444444444444",
+            upgradeSuperToken: "0x5555555555555555555555555555555555555555",
+            signature: "0xabcdef",
+          },
+          value: "0",
+        },
+      ],
+    },
+  ),
+]);
 
 const RelayExecutionErrorSchema = Type.Object({
   code: Type.String({ description: "Machine-readable error code." }),
@@ -202,7 +273,10 @@ export const RelayExecutionResponseSchema = Type.Object(
     terminal: Type.Boolean({
       description: "True when the execution has reached a final public state.",
     }),
-    kind: Type.Literal("clearMacroV1", { description: "Relay kind." }),
+    kind: Type.Union(
+      [Type.Literal("clearMacroV1"), Type.Literal("clearMacroPermit2V1")],
+      { description: "Relay kind." },
+    ),
     chainId: Type.Integer({ minimum: 1, description: "EVM chain ID." }),
     clientRequestId: Type.Optional(
       Type.String({
@@ -368,6 +442,15 @@ export const CapabilitiesResponseSchema = Type.Object({
         description:
           "ClearMacro forwarder address dapps should use when constructing payloads for this chain.",
       }),
+      supportedKinds: Type.Array(
+        Type.Union([
+          Type.Literal("clearMacroV1"),
+          Type.Literal("clearMacroPermit2V1"),
+        ]),
+        {
+          description: "Relay kinds supported by this provider on the chain.",
+        },
+      ),
       macroPolicy: Type.Unsafe<typeof CapabilitiesMacroPolicySchema>({
         ...CapabilitiesMacroPolicySchema,
         description: "Macro admission policy for this chain.",

@@ -77,4 +77,72 @@ describe("db migrations and repositories", () => {
     expect(updated.state).toBe("submitted");
     expect(executionEvents.listByExecution(created.id)).toHaveLength(1);
   });
+
+  it("persists and reads clearMacroPermit2V1 rows with permit2_json", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const permit2Json = JSON.stringify({
+      permit: {
+        permitted: { token: "0x00000000000000000000000000000000000000cc", amount: "1" },
+        nonce: "9",
+        deadline: "9999999999",
+      },
+      spender: "0x00000000000000000000000000000000000000dd",
+      upgradeSuperToken: "0x0000000000000000000000000000000000000000",
+      signature: "0xbeef",
+    });
+    const created = executions.createPending({
+      ...basePending(),
+      kind: "clearMacroPermit2V1",
+      digest: "0x" + "33".repeat(32),
+      signature: "0xbeef",
+      permit2Json,
+    });
+    const loaded = executions.getByIdOrThrow(created.id);
+    expect(loaded.kind).toBe("clearMacroPermit2V1");
+    expect(loaded.permit2Json).toBe(permit2Json);
+  });
+
+  it("maps legacy clearMacroV1 rows with null permit2_json", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const created = executions.createPending({
+      ...basePending(),
+      digest: "0x" + "44".repeat(32),
+      permit2Json: null,
+    });
+    expect(executions.getByIdOrThrow(created.id).permit2Json).toBeNull();
+  });
+
+  it("findByDedupKey works with a Permit2 authorization digest", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const digest = "0x" + "55".repeat(32);
+    const created = executions.createPending({
+      ...basePending(),
+      kind: "clearMacroPermit2V1",
+      digest,
+      signature: "0xbeef",
+      permit2Json: JSON.stringify({
+        permit: {
+          permitted: { token: "0x00000000000000000000000000000000000000cc", amount: "1" },
+          nonce: "1",
+          deadline: "9999999999",
+        },
+        spender: "0x00000000000000000000000000000000000000dd",
+        upgradeSuperToken: "0x0000000000000000000000000000000000000000",
+        signature: "0xbeef",
+      }),
+    });
+    const found = executions.findByDedupKey(
+      1,
+      "0x0000000000000000000000000000000000000001",
+      "0x0000000000000000000000000000000000000003",
+      digest,
+    );
+    expect(found?.id).toBe(created.id);
+  });
 });

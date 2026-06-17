@@ -104,6 +104,17 @@ export const clearMacroForwarderV1Abi = [
   {
     "inputs": [
       {
+        "internalType": "address",
+        "name": "token",
+        "type": "address"
+      }
+    ],
+    "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "string",
         "name": "str",
         "type": "string"
@@ -142,6 +153,56 @@ export const clearMacroForwarderV1Abi = [
     ],
     "name": "MacroExecuted",
     "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "signer",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "underlying",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "superToken",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "underlyingAmount",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "superTokenAmount",
+        "type": "uint256"
+      }
+    ],
+    "name": "Permit2UpgradeExecuted",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "PERMIT2",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   },
   {
     "inputs": [],
@@ -197,40 +258,6 @@ export const clearMacroForwarderV1Abi = [
       }
     ],
     "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "contract IClearMacro",
-        "name": "m",
-        "type": "address"
-      },
-      {
-        "internalType": "bytes",
-        "name": "encodedPayload",
-        "type": "bytes"
-      },
-      {
-        "internalType": "address",
-        "name": "signer",
-        "type": "address"
-      },
-      {
-        "internalType": "bytes",
-        "name": "signature",
-        "type": "bytes"
-      }
-    ],
-    "name": "runMacro",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "payable",
     "type": "function"
   },
   {
@@ -302,6 +329,78 @@ export const clearMacroForwarderV1Abi = [
         "type": "bytes"
       }
     ],
+    "name": "getDigest",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
+      },
+      {
+        "internalType": "uint192",
+        "name": "key",
+        "type": "uint192"
+      }
+    ],
+    "name": "getNonce",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract IClearMacro",
+        "name": "m",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "encodedPayload",
+        "type": "bytes"
+      }
+    ],
+    "name": "getStructHash",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract IClearMacro",
+        "name": "m",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "encodedPayload",
+        "type": "bytes"
+      }
+    ],
     "name": "getTypeDefinition",
     "outputs": [
       {
@@ -348,9 +447,143 @@ export const clearMacroForwarderV1Abi = [
         "internalType": "bytes",
         "name": "encodedPayload",
         "type": "bytes"
+      },
+      {
+        "internalType": "address",
+        "name": "signer",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "signature",
+        "type": "bytes"
       }
     ],
-    "name": "getStructHash",
+    "name": "runMacro",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "components": [
+                  {
+                    "internalType": "address",
+                    "name": "token",
+                    "type": "address"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct IPermit2.TokenPermissions",
+                "name": "permitted",
+                "type": "tuple"
+              },
+              {
+                "internalType": "uint256",
+                "name": "nonce",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "deadline",
+                "type": "uint256"
+              }
+            ],
+            "internalType": "struct IPermit2.PermitTransferFrom",
+            "name": "permit",
+            "type": "tuple"
+          },
+          {
+            "internalType": "address",
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "witness",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "string",
+            "name": "witnessTypeString",
+            "type": "string"
+          },
+          {
+            "internalType": "bytes",
+            "name": "signature",
+            "type": "bytes"
+          },
+          {
+            "internalType": "address",
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "upgradeSuperToken",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct IClearMacroPermit2Extension.Permit2Context",
+        "name": "permit2Context",
+        "type": "tuple"
+      },
+      {
+        "internalType": "contract IClearMacro",
+        "name": "m",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "encodedPayload",
+        "type": "bytes"
+      }
+    ],
+    "name": "runPermit2AndMacro",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract IClearMacro",
+        "name": "m",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "encodedPayload",
+        "type": "bytes"
+      },
+      {
+        "internalType": "address",
+        "name": "upgradeSuperToken",
+        "type": "address"
+      }
+    ],
+    "name": "getPermit2WitnessStructHash",
     "outputs": [
       {
         "internalType": "bytes32",
@@ -374,36 +607,12 @@ export const clearMacroForwarderV1Abi = [
         "type": "bytes"
       }
     ],
-    "name": "getDigest",
+    "name": "getPermit2WitnessTypeString",
     "outputs": [
       {
-        "internalType": "bytes32",
+        "internalType": "string",
         "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "sender",
-        "type": "address"
-      },
-      {
-        "internalType": "uint192",
-        "name": "key",
-        "type": "uint192"
-      }
-    ],
-    "name": "getNonce",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
+        "type": "string"
       }
     ],
     "stateMutability": "view",

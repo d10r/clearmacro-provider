@@ -172,6 +172,8 @@ export interface FullStackDeployOutput {
   forwarderAddress: Address;
   macroAddress: Address;
   relayerSigner: Address;
+  underlyingToken: Address;
+  wrapperSuperToken: Address;
 }
 
 const fullStackE2EDeployerAbi = [
@@ -192,6 +194,8 @@ const fullStackE2EDeployerAbi = [
           { name: "forwarderAddress", type: "address" },
           { name: "macroAddress", type: "address" },
           { name: "relayerSigner", type: "address" },
+          { name: "underlyingToken", type: "address" },
+          { name: "wrapperSuperToken", type: "address" },
         ],
       },
     ],
@@ -213,6 +217,8 @@ const fullStackE2EDeployerAbi = [
           { name: "forwarderAddress", type: "address" },
           { name: "macroAddress", type: "address" },
           { name: "relayerSigner", type: "address" },
+          { name: "underlyingToken", type: "address" },
+          { name: "wrapperSuperToken", type: "address" },
         ],
       },
     ],
@@ -227,6 +233,8 @@ function normalizeFullStackDeployment(value: {
   forwarderAddress: Address;
   macroAddress: Address;
   relayerSigner: Address;
+  underlyingToken: Address;
+  wrapperSuperToken: Address;
 }): FullStackDeployOutput {
   return {
     chainId: Number(value.chainId),
@@ -236,6 +244,8 @@ function normalizeFullStackDeployment(value: {
     forwarderAddress: value.forwarderAddress,
     macroAddress: value.macroAddress,
     relayerSigner: value.relayerSigner,
+    underlyingToken: value.underlyingToken,
+    wrapperSuperToken: value.wrapperSuperToken,
   };
 }
 
@@ -244,6 +254,9 @@ type FoundryArtifact = {
   bytecode: {
     object: Hex;
     linkReferences?: Record<string, Record<string, Array<{ start: number; length: number }>>>;
+  };
+  deployedBytecode?: {
+    object: Hex;
   };
 };
 
@@ -271,6 +284,31 @@ function linkArtifactBytecode(artifact: FoundryArtifact, libraries: Record<strin
 
 function readFoundryArtifact(forgeDir: string, artifactPath: string): FoundryArtifact {
   return JSON.parse(readFileSync(join(forgeDir, "out", artifactPath), "utf8")) as FoundryArtifact;
+}
+
+export const CANONICAL_PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+
+export async function setPermit2OnAnvil(input: { repoRoot: string; rpcUrl: string }): Promise<void> {
+  const forgeDir = join(input.repoRoot, "test", "fixtures", "contracts");
+  const artifact = readFoundryArtifact(forgeDir, "MockPermit2.sol/MockPermit2.json");
+  const deployedBytecode = artifact.deployedBytecode?.object;
+  if (!deployedBytecode || deployedBytecode === "0x") {
+    throw new Error("MockPermit2 deployed bytecode missing; run forge build for stack fixtures");
+  }
+  const res = await fetch(input.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "anvil_setCode",
+      params: [CANONICAL_PERMIT2_ADDRESS, deployedBytecode.startsWith("0x") ? deployedBytecode : `0x${deployedBytecode}`],
+    }),
+  });
+  const json = (await res.json()) as { error?: { message?: string } };
+  if (json.error) {
+    throw new Error(`anvil_setCode Permit2 failed: ${json.error.message ?? JSON.stringify(json.error)}`);
+  }
 }
 
 export async function setERC1820RegistryCode(input: { repoRoot: string; rpcUrl: string }): Promise<void> {
@@ -547,6 +585,127 @@ export async function fundNativeBalance(rpcUrl: string, address: Address, wei: b
   if (json.error) {
     throw new Error(`anvil_setBalance failed: ${json.error.message ?? JSON.stringify(json.error)}`);
   }
+}
+
+const testTokenMintAbi = [
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
+
+const erc20ApproveAbi = [
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
+
+/** Mints TestToken underlying to `to` using the Anvil default deployer account. */
+export async function mintTestToken(input: {
+  rpcUrl: string;
+  token: Address;
+  to: Address;
+  amount: bigint;
+}): Promise<void> {
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const deployer = privateKeyToAccount(ANVIL_DEFAULT_DEPLOYER_PK);
+  const walletClient = createWalletClient({
+    chain,
+    transport: http(input.rpcUrl),
+    account: deployer,
+  });
+  const hash = await walletClient.writeContract({
+    address: input.token,
+    abi: testTokenMintAbi,
+    functionName: "mint",
+    args: [input.to, input.amount],
+  });
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  if (receipt.status !== "success") {
+    throw new Error(`mintTestToken failed: ${hash}`);
+  }
+}
+
+/** Approves `spender` to pull `amount` of `token` from `ownerPk`. */
+export async function approveErc20(input: {
+  rpcUrl: string;
+  token: Address;
+  ownerPrivateKey: Hex;
+  spender: Address;
+  amount: bigint;
+}): Promise<void> {
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const owner = privateKeyToAccount(input.ownerPrivateKey);
+  const walletClient = createWalletClient({
+    chain,
+    transport: http(input.rpcUrl),
+    account: owner,
+  });
+  const hash = await walletClient.writeContract({
+    address: input.token,
+    abi: erc20ApproveAbi,
+    functionName: "approve",
+    args: [input.spender, input.amount],
+  });
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  if (receipt.status !== "success") {
+    throw new Error(`approveErc20 failed: ${hash}`);
+  }
+}
+
+const superTokenBalanceOfAbi = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
+
+export async function readSuperTokenBalance(input: {
+  rpcUrl: string;
+  superToken: Address;
+  account: Address;
+}): Promise<bigint> {
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  return publicClient.readContract({
+    address: input.superToken,
+    abi: superTokenBalanceOfAbi,
+    functionName: "balanceOf",
+    args: [input.account],
+  });
 }
 
 export function digestForRelayerLikeFixture(macro: Address, payload: Hex): Hex {

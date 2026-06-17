@@ -13,6 +13,9 @@ import {
 import { processRelayerWorkerTick } from "../../src/relayer/worker.js";
 import { OzRelayerRateLimitError } from "../../src/relayer/errors.js";
 import { loadRegistry } from "../../src/config/registry.js";
+import { clearMacroForwarderV1Abi } from "../../src/chain/clearMacroForwarderV1Abi.js";
+import { buildPermit2Context } from "../../src/chain/permit2.js";
+import { decodeFunctionData } from "viem";
 
 function createExecutionInput(overrides?: Partial<NewRelayExecution>): NewRelayExecution {
   return {
@@ -39,6 +42,76 @@ function createExecutionInput(overrides?: Partial<NewRelayExecution>): NewRelayE
     requiredConfirmations: 1,
     ...overrides,
   };
+}
+
+const defaultPermit2Json = JSON.stringify({
+  permit: {
+    permitted: {
+      token: "0x00000000000000000000000000000000000000cc",
+      amount: "1000000",
+    },
+    nonce: "123",
+    deadline: "4102444800",
+  },
+  spender: "0x0000000000000000000000000000000000000001",
+  upgradeSuperToken: "0x0000000000000000000000000000000000000000",
+  signature: "0xbeef",
+});
+
+function createPermit2ExecutionInput(overrides?: Partial<NewRelayExecution>): NewRelayExecution {
+  return createExecutionInput({
+    kind: "clearMacroPermit2V1",
+    signature: "0xbeef",
+    permit2Json: defaultPermit2Json,
+    ...overrides,
+  });
+}
+
+function stubRelayerClient(submit?: (tx: { data: string }) => unknown) {
+  return {
+    getRelayer: async () => ({
+      address: "0x0000000000000000000000000000000000000010",
+      paused: false,
+      system_disabled: false,
+    }),
+    submitTransaction: async (_id: string, tx: { data: string }) => {
+      submit?.(tx);
+      return {
+        id: "oz-tx-permit2",
+        hash: "0x" + "cd".repeat(32),
+        status: "submitted",
+        status_reason: null,
+        created_at: new Date().toISOString(),
+        sent_at: new Date().toISOString(),
+        confirmed_at: null,
+        gas_price: "1",
+        gas_limit: 21000,
+        nonce: 1,
+        value: "0",
+        from: "0x0000000000000000000000000000000000000010",
+        to: "0x0000000000000000000000000000000000000001",
+        relayer_id: "relayer-main",
+        data: tx.data,
+        max_fee_per_gas: null,
+        max_priority_fee_per_gas: null,
+        mined_at: null,
+        receipt: null,
+      };
+    },
+    getTransaction: async () => {
+      throw new Error("not used");
+    },
+  };
+}
+
+function defaultResolvePermit2Context() {
+  return async () =>
+    buildPermit2Context({
+      permit2: JSON.parse(defaultPermit2Json),
+      owner: "0x0000000000000000000000000000000000000003",
+      witness: `0x${"11".repeat(32)}`,
+      witnessTypeString: "witness-type",
+    });
 }
 
 function setup() {
@@ -579,5 +652,218 @@ describe("relayer worker", () => {
     });
     expect(ozPollBackoff.until).toBeGreaterThan(0);
     expect(executionEvents.listByExecution(created.id).some((e) => e.type === "relayer_poll_rate_limited")).toBe(true);
+  });
+
+  it("submits clearMacroPermit2V1 execution as runPermit2AndMacro calldata", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    executions.createPending(createPermit2ExecutionInput());
+    let submittedData = "";
+    const relayerClient = stubRelayerClient((tx) => {
+      submittedData = tx.data;
+    });
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+      resolvePermit2Context: defaultResolvePermit2Context(),
+    });
+
+    const decoded = decodeFunctionData({
+      abi: clearMacroForwarderV1Abi,
+      data: submittedData as `0x${string}`,
+    });
+    expect(decoded.functionName).toBe("runPermit2AndMacro");
+  });
+
+  it("rejects Permit2 execution when preflight deterministically reverts", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput());
+    let submitCalls = 0;
+    const relayerClient = stubRelayerClient(() => {
+      submitCalls += 1;
+    });
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "deterministic_revert",
+      resolvePermit2Context: defaultResolvePermit2Context(),
+    });
+
+    expect(submitCalls).toBe(0);
+    expect(executions.getByIdOrThrow(created.id).state).toBe("rejected");
+    expect(executions.getByIdOrThrow(created.id).terminal).toBe(1);
+  });
+
+  it("keeps Permit2 execution pending when preflight reports rpc_unavailable", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput());
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "rpc_unavailable",
+      resolvePermit2Context: defaultResolvePermit2Context(),
+    });
+
+    expect(executions.getByIdOrThrow(created.id).state).toBe("pending");
+    expect(executionEvents.listByExecution(created.id).some((e) => e.type === "preflight_retry_scheduled")).toBe(true);
+  });
+
+  it("skips Permit2 worker preflight when force-after-preflight flag is set", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    executions.createPending(createPermit2ExecutionInput({ forceAfterPreflightRevert: 1 }));
+    let preflightCalls = 0;
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => {
+        preflightCalls += 1;
+        return "deterministic_revert";
+      },
+      resolvePermit2Context: defaultResolvePermit2Context(),
+    });
+
+    expect(preflightCalls).toBe(0);
+    expect(executions.listSubmittable(10)).toHaveLength(0);
+  });
+
+  it("fails Permit2 execution with INVALID_PERMIT2_STATE when permit2_json is missing", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput({ permit2Json: null }));
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+    });
+
+    const updated = executions.getByIdOrThrow(created.id);
+    expect(updated.state).toBe("failed");
+    expect(updated.lastErrorJson).toContain("INVALID_PERMIT2_STATE");
+  });
+
+  it("fails Permit2 execution with INVALID_PERMIT2_STATE when permit2_json is malformed", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput({ permit2Json: "{not-json" }));
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+    });
+
+    const updated = executions.getByIdOrThrow(created.id);
+    expect(updated.state).toBe("failed");
+    expect(updated.lastErrorJson).toContain("INVALID_PERMIT2_STATE");
+  });
+
+  it("keeps Permit2 execution pending when witness resolution throws", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput());
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+      resolvePermit2Context: async () => {
+        throw new Error("RPC down");
+      },
+    });
+
+    expect(executions.getByIdOrThrow(created.id).state).toBe("pending");
+    expect(executionEvents.listByExecution(created.id).some((e) => e.type === "preflight_retry_scheduled")).toBe(true);
+  });
+
+  it("expires Permit2 execution before submission when validBefore elapsed", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(
+      createPermit2ExecutionInput({
+        validBefore: String(Math.floor(Date.now() / 1000) - 60),
+      }),
+    );
+    const relayerClient = stubRelayerClient();
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: relayerClient as never,
+      registry,
+      batchSize: 10,
+      preflightPermit2Simulation: async () => "ok",
+      resolvePermit2Context: defaultResolvePermit2Context(),
+    });
+
+    expect(executions.getByIdOrThrow(created.id).state).toBe("expired");
+  });
+
+  it("retries transient Permit2 submit failures before failed", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createPermit2ExecutionInput());
+    const relayerClient = {
+      getRelayer: async () => ({
+        address: "0x0000000000000000000000000000000000000010",
+        paused: false,
+        system_disabled: false,
+      }),
+      submitTransaction: async () => {
+        throw new Error("Relayer HTTP 503");
+      },
+      getTransaction: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    for (let i = 0; i < 3; i++) {
+      await processRelayerWorkerTick({
+        executions,
+        executionEvents,
+        relayerTransactions,
+        relayerClient: relayerClient as never,
+        registry,
+        batchSize: 10,
+        submitRetryCount: 3,
+        preflightPermit2Simulation: async () => "ok",
+        resolvePermit2Context: defaultResolvePermit2Context(),
+      });
+    }
+    expect(executions.getByIdOrThrow(created.id).state).toBe("failed");
+    expect(executionEvents.listByExecution(created.id).some((e) => e.type === "relayer_submit_retry_scheduled")).toBe(true);
   });
 });

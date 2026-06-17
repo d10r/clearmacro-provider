@@ -26,13 +26,30 @@ describe("projectRelayerState", () => {
     ).toBe("submitted");
   });
 
-  it("maps confirmed to succeeded", () => {
+  it("keeps confirmed without receipt in submitted until receipt is available", () => {
     expect(
       projectRelayerState({
         status: "confirmed",
         statusReason: null,
         hash: `0x${"ab".repeat(32)}`,
         confirmedAt: new Date().toISOString(),
+        requiredConfirmations: 1,
+      }).state,
+    ).toBe("submitted");
+  });
+
+  it("maps confirmed with success receipt to succeeded", () => {
+    expect(
+      projectRelayerState({
+        status: "confirmed",
+        statusReason: null,
+        hash: `0x${"ab".repeat(32)}`,
+        confirmedAt: new Date().toISOString(),
+        receipt: {
+          transactionHash: `0x${"ab".repeat(32)}`,
+          blockNumber: "1",
+          status: "success",
+        },
         requiredConfirmations: 1,
       }).state,
     ).toBe("succeeded");

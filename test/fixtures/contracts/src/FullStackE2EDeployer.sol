@@ -5,8 +5,10 @@ import { IAccessControl } from "@openzeppelin-v5/contracts/access/IAccessControl
 import { ISuperfluid } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
 import { ISETH } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/tokens/ISETH.sol";
 import { ISuperfluidToken } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluidToken.sol";
-import { ClearMacroForwarderV1 } from "@superfluid-finance/ethereum-contracts/contracts/utils/ClearMacroForwarderV1.sol";
+import { ClearMacroForwarderV1WithPermit2 } from "@superfluid-finance/ethereum-contracts/contracts/utils/ClearMacroForwarderV1WithPermit2.sol";
 import { SuperfluidFrameworkDeployer } from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.t.sol";
+import { SuperToken } from "@superfluid-finance/ethereum-contracts/contracts/superfluid/SuperToken.sol";
+import { TestToken } from "@superfluid-finance/ethereum-contracts/contracts/utils/TestToken.sol";
 import { StackE2EClearMacro } from "./StackE2EClearMacro.sol";
 
 contract FullStackE2EDeployer is SuperfluidFrameworkDeployer {
@@ -20,6 +22,8 @@ contract FullStackE2EDeployer is SuperfluidFrameworkDeployer {
         address forwarderAddress;
         address macroAddress;
         address relayerSigner;
+        address underlyingToken;
+        address wrapperSuperToken;
     }
 
     Deployment internal _deployment;
@@ -44,7 +48,9 @@ contract FullStackE2EDeployer is SuperfluidFrameworkDeployer {
 
         SuperfluidFrameworkDeployer.Framework memory sf = this.getFramework();
         ISETH nativeSuperToken = this.deployNativeAssetSuperToken("Ether", "ETHx");
-        ClearMacroForwarderV1 forwarder = new ClearMacroForwarderV1(ISuperfluid(address(sf.host)));
+        (TestToken underlyingToken, SuperToken wrapperSuperToken) =
+            this.deployWrapperSuperToken("Test USD", "TUSD", 18, type(uint256).max, address(0));
+        ClearMacroForwarderV1WithPermit2 forwarder = new ClearMacroForwarderV1WithPermit2(ISuperfluid(address(sf.host)));
         StackE2EClearMacro clearMacro = new StackE2EClearMacro(address(nativeSuperToken));
 
         sf.governance.enableTrustedForwarder(sf.host, ISuperfluidToken(address(0)), address(forwarder));
@@ -57,7 +63,9 @@ contract FullStackE2EDeployer is SuperfluidFrameworkDeployer {
             simpleACL: address(sf.host.getSimpleACL()),
             forwarderAddress: address(forwarder),
             macroAddress: address(clearMacro),
-            relayerSigner: relayerSigner
+            relayerSigner: relayerSigner,
+            underlyingToken: address(underlyingToken),
+            wrapperSuperToken: address(wrapperSuperToken)
         });
         _deployment = deployment;
         deployed = true;

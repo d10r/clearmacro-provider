@@ -1,6 +1,6 @@
 import type { Address, Hex } from "viem";
 import { createPublicClient, defineChain, http } from "viem";
-import { buildRunMacroCalldata } from "../tx/builder.js";
+import { buildRunMacroCalldata, buildRunPermit2AndMacroCalldata } from "../tx/builder.js";
 import { estimateTxFundingBreakdown, resolveMaxFeePerGas } from "./estimate-tx-funding.js";
 
 const DEFAULT_REFERENCE_GAS_LIMIT = 200_000n;
@@ -15,6 +15,43 @@ export function referenceRunMacroCalldata(forwarderAddress: Address): Hex {
     signer: placeholder,
     signature,
   }) as Hex;
+}
+
+/**
+ * Representative `runPermit2AndMacro` calldata for gas / fee estimation (not submitted).
+ * Used for funding targets because production Permit2 rollout includes implied-upgrade,
+ * which produces larger calldata than `runMacro`.
+ */
+export function referenceRunPermit2AndMacroCalldata(forwarderAddress: Address): Hex {
+  const placeholder = forwarderAddress;
+  const signature = `0x${"00".repeat(65)}` as Hex;
+  return buildRunPermit2AndMacroCalldata({
+    permit2Context: {
+      permit: {
+        permitted: {
+          token: placeholder,
+          amount: 1_000_000n,
+        },
+        nonce: 1n,
+        deadline: 4_102_444_800n,
+      },
+      owner: placeholder,
+      witness: `0x${"11".repeat(32)}`,
+      witnessTypeString: "ClearMacro witness)Action(bytes32 salt)ClearMacro(address upgradeSuperToken,Action action,Security security)Security(string domain,address macroContract,string provider,uint256 validAfter,uint256 validBefore,uint256 nonce)TokenPermissions(address token,uint256 amount)",
+      signature,
+      spender: placeholder,
+      upgradeSuperToken: placeholder,
+    },
+    macro: placeholder,
+    encodedPayload: "0x",
+  }) as Hex;
+}
+
+/** Conservative relay calldata reference for relayer funding estimates. */
+export function referenceRelayCalldata(forwarderAddress: Address): Hex {
+  const runMacro = referenceRunMacroCalldata(forwarderAddress);
+  const runPermit2 = referenceRunPermit2AndMacroCalldata(forwarderAddress);
+  return runPermit2.length >= runMacro.length ? runPermit2 : runMacro;
 }
 
 export type RelayFundingEstimate = {
@@ -55,7 +92,7 @@ export async function estimateRelayFundingTarget(input: {
     rpcUrls: { default: { http: [rpcUrl] } },
   });
   const client = createPublicClient({ chain, transport: http(rpcUrl) });
-  const data = referenceRunMacroCalldata(forwarderAddress);
+  const data = referenceRelayCalldata(forwarderAddress);
 
   const gasLimit = gasLimitOverride ?? DEFAULT_REFERENCE_GAS_LIMIT;
 

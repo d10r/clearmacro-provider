@@ -5,7 +5,8 @@ TypeScript service that accepts signed **ClearMacro relay executions**, validate
 **Production:** https://clearmacro-provider.superfluid.dev  
 **API reference:** https://clearmacro-provider.superfluid.dev/docs  
 **Operations:** [`docs/operations.md`](docs/operations.md)  
-**Architecture notes:** [`docs/architecture.md`](docs/architecture.md)
+**Architecture notes:** [`docs/architecture.md`](docs/architecture.md)  
+**Implementation specs:** [`specs/`](specs/)
 
 ## What it runs
 
@@ -84,7 +85,7 @@ You can generate Superfluid-wide templates from `@superfluid-finance/metadata` w
 
 ## Forwarder ABI
 
-On-chain calls use a **vendored** `ClearMacroForwarderV1` ABI at `src/chain/clearMacroForwarderV1.abi.ts` (no runtime dependency on `@superfluid-finance/ethereum-contracts`). After the forwarder changes in protocol-monorepo, regenerate from a local build:
+On-chain calls use a **vendored** `ClearMacroForwarderV1WithPermit2` ABI at `src/chain/clearMacroForwarderV1.abi.ts` (no runtime dependency on `@superfluid-finance/ethereum-contracts`). After the forwarder changes in protocol-monorepo, regenerate from a local build:
 
 ```bash
 # in protocol-monorepo/packages/ethereum-contracts: yarn build

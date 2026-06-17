@@ -1,5 +1,5 @@
 /**
- * Copies `ClearMacroForwarderV1` ABI from a local protocol-monorepo build into this repo.
+ * Copies `ClearMacroForwarderV1WithPermit2` ABI from a local protocol-monorepo build into this repo.
  *
  * Prerequisite (in protocol-monorepo):
  *   cd packages/ethereum-contracts && yarn build
@@ -24,10 +24,10 @@ function run(): void {
     string,
     unknown
   >;
-  const abi = bundled.ClearMacroForwarderV1;
+  const abi = bundled.ClearMacroForwarderV1WithPermit2;
   if (!Array.isArray(abi)) {
     throw new Error(
-      `Missing ClearMacroForwarderV1 in ${bundledPath}. Run ethereum-contracts build first.`,
+      `Missing ClearMacroForwarderV1WithPermit2 in ${bundledPath}. Run ethereum-contracts build first.`,
     );
   }
   const source = [

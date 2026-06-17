@@ -8,6 +8,7 @@ import { clearMacroForwarderV1Abi } from "../../src/chain/clearMacroForwarderV1A
 import { clearMacroPayloadAbiParameters } from "../../src/validation/clearmacro.js";
 import {
   allocateHostPort,
+  approveErc20,
   chmodStackTree,
   deployFullStackE2EContractsOnAnvil,
   dockerComposeLogs,
@@ -16,16 +17,24 @@ import {
   fundNativeBalance,
   getRepoRoot,
   makeStackWorkDir,
+  mintTestToken,
+  readSuperTokenBalance,
   RELAYER_SIGNER_PRIVATE_KEY,
   runDockerCompose,
   setERC1820RegistryCode,
+  setPermit2OnAnvil,
   waitForHttpOk,
   waitForJsonRpcChainId,
   waitForOzRelayerReady,
   waitForReadyz,
   writeOzRelayerConfig,
   writeProviderRegistry,
+  CANONICAL_PERMIT2_ADDRESS,
 } from "../fixtures/docker-stack.js";
+import {
+  buildImpliedUpgradePermit2RelayPayload,
+  buildWitnessOnlyPermit2RelayPayload,
+} from "../fixtures/relay-fixtures.js";
 
 const E2E_OZ_API_KEY = "local-e2e-oz-relayer-api-key-32chars!!";
 const CHAIN_ID_HEX = "0x7a69" as Hex;
@@ -249,6 +258,321 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
       expect(final.transaction.hash).toMatch(/^0x[0-9a-fA-F]{64}$/);
       expect(final.receipt.status).toBe("success");
       expect(final.receipt.transactionHash.toLowerCase()).toBe(final.transaction.hash.toLowerCase());
+    } catch (error) {
+      failWithLogs(error instanceof Error ? error.message : String(error));
+    } finally {
+      try {
+        runDockerCompose(repoRoot, project, ["down", "-v", "--remove-orphans"], composeEnv());
+      } catch {
+        // ignore teardown errors
+      }
+      try {
+        rmSync(stackDir, { recursive: true, force: true });
+      } catch {
+        // ignore temp cleanup errors
+      }
+    }
+  });
+
+  it("witness-only Permit2: real digest signature, POST clearMacroPermit2V1, poll to succeeded", async () => {
+    const repoRoot = getRepoRoot();
+    const project = `cme2ep2${process.pid}${randomBytes(3).toString("hex")}`;
+    const anvilPort = await allocateHostPort();
+    const appPort = await allocateHostPort();
+    const ozHostPort = await allocateHostPort();
+    const stackDir = makeStackWorkDir();
+    const anvilHostRpc = `http://127.0.0.1:${anvilPort}`;
+    const appBase = `http://127.0.0.1:${appPort}`;
+    const ozHostBase = `http://127.0.0.1:${ozHostPort}`;
+
+    const chain = {
+      id: 31337,
+      name: "anvil",
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      rpcUrls: { default: { http: [anvilHostRpc] } },
+    } as const;
+
+    const composeEnv = (): Record<string, string> => ({
+      E2E_ANVIL_HOST_PORT: String(anvilPort),
+      E2E_APP_HOST_PORT: String(appPort),
+      E2E_OZ_HOST_PORT: String(ozHostPort),
+      E2E_STACK_CONFIG_DIR: stackDir,
+      E2E_OZ_RELAYER_API_KEY: E2E_OZ_API_KEY,
+      OZ_KEYSTORE_PASSPHRASE: process.env.OZ_KEYSTORE_PASSPHRASE ?? "change-me",
+      OZ_STORAGE_ENCRYPTION_KEY: process.env.OZ_STORAGE_ENCRYPTION_KEY ?? "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      OZ_RELAYER_UID: String(typeof process.getuid === "function" ? process.getuid() : 1000),
+      OZ_RELAYER_GID: String(typeof process.getgid === "function" ? process.getgid() : 1000),
+    });
+
+    const failWithLogs = (msg: string): never => {
+      let logs = "(could not fetch logs)";
+      try {
+        logs = dockerComposeLogs(repoRoot, project, composeEnv());
+      } catch {
+        // keep fallback
+      }
+      throw new Error(`${msg}\n--- docker compose logs ---\n${logs}`);
+    };
+
+    const publicClient = createPublicClient({ chain, transport: http(anvilHostRpc) });
+
+    try {
+      forgeBuildFullStackFixtures(repoRoot);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "anvil"], composeEnv());
+      await waitForJsonRpcChainId(anvilHostRpc, CHAIN_ID_HEX, 45_000);
+      await setERC1820RegistryCode({ repoRoot, rpcUrl: anvilHostRpc });
+      await setPermit2OnAnvil({ repoRoot, rpcUrl: anvilHostRpc });
+
+      const relayerSigner = privateKeyToAccount(RELAYER_SIGNER_PRIVATE_KEY);
+      const requestSigner = privateKeyToAccount(E2E_REQUEST_SIGNER_PK);
+
+      const deployed = await deployFullStackE2EContractsOnAnvil({
+        repoRoot,
+        relayerSigner: relayerSigner.address,
+        rpcUrl: anvilHostRpc,
+      });
+
+      await fundNativeBalance(anvilHostRpc, deployed.relayerSigner, 50n * 10n ** 18n);
+      await fundNativeBalance(anvilHostRpc, requestSigner.address, 10n * 10n ** 18n);
+
+      ensureAnvilKeystore(repoRoot, join(stackDir, "keys"));
+      writeOzRelayerConfig(stackDir);
+      writeProviderRegistry(stackDir, deployed.forwarderAddress, deployed.macroAddress);
+      chmodStackTree(stackDir);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "redis"], composeEnv());
+      runDockerCompose(repoRoot, project, ["up", "-d", "oz-relayer"], composeEnv());
+      await waitForOzRelayerReady(ozHostBase, 120_000);
+      runDockerCompose(repoRoot, project, ["up", "-d", "app"], composeEnv());
+
+      await waitForHttpOk(`${appBase}/healthz`, 120_000);
+      await waitForReadyz(appBase, 120_000);
+
+      const salt = randomBytes(32);
+      const nonce = await publicClient.readContract({
+        address: deployed.forwarderAddress,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getNonce",
+        args: [requestSigner.address, 0n],
+      });
+
+      const actionParams = encodeAbiParameters([{ type: "bytes32", name: "salt" }], [`0x${salt.toString("hex")}` as Hex]);
+      const payload = encodeAbiParameters(clearMacroPayloadAbiParameters, [
+        {
+          action: { params: actionParams },
+          security: {
+            domain: "e2e",
+            macroContract: deployed.macroAddress,
+            provider: "macros.superfluid.eth",
+            validAfter: 0n,
+            validBefore: 0n,
+            nonce,
+          },
+        },
+      ]) as Hex;
+
+      const arbitrarySpender = "0x0000000000000000000000000000000000009999" as Address;
+      const relayBody = await buildWitnessOnlyPermit2RelayPayload({
+        publicClient,
+        forwarderAddress: deployed.forwarderAddress,
+        macroAddress: deployed.macroAddress,
+        payload,
+        signer: requestSigner,
+        chainId: 31337,
+        spender: arbitrarySpender,
+      });
+
+      const postRes = await fetch(`${appBase}/v1/relay-executions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(relayBody),
+      });
+      expect(postRes.status).toBe(202);
+      const created = (await postRes.json()) as {
+        state: string;
+        kind: string;
+        links: { self: string };
+      };
+      expect(created.state).toBe("pending");
+      expect(created.kind).toBe("clearMacroPermit2V1");
+
+      const final = await pollUntilSucceededWithReceipt(`${appBase}${created.links.self}`, 180_000);
+      expect(final.receipt.status).toBe("success");
+    } catch (error) {
+      failWithLogs(error instanceof Error ? error.message : String(error));
+    } finally {
+      try {
+        runDockerCompose(repoRoot, project, ["down", "-v", "--remove-orphans"], composeEnv());
+      } catch {
+        // ignore teardown errors
+      }
+      try {
+        rmSync(stackDir, { recursive: true, force: true });
+      } catch {
+        // ignore temp cleanup errors
+      }
+    }
+  });
+
+  it("implied-upgrade Permit2: underlying pull, upgrade, POST clearMacroPermit2V1, poll to succeeded", async () => {
+    const repoRoot = getRepoRoot();
+    const project = `cme2ep2iu${process.pid}${randomBytes(3).toString("hex")}`;
+    const anvilPort = await allocateHostPort();
+    const appPort = await allocateHostPort();
+    const ozHostPort = await allocateHostPort();
+    const stackDir = makeStackWorkDir();
+    const anvilHostRpc = `http://127.0.0.1:${anvilPort}`;
+    const appBase = `http://127.0.0.1:${appPort}`;
+    const ozHostBase = `http://127.0.0.1:${ozHostPort}`;
+
+    const chain = {
+      id: 31337,
+      name: "anvil",
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      rpcUrls: { default: { http: [anvilHostRpc] } },
+    } as const;
+
+    const composeEnv = (): Record<string, string> => ({
+      E2E_ANVIL_HOST_PORT: String(anvilPort),
+      E2E_APP_HOST_PORT: String(appPort),
+      E2E_OZ_HOST_PORT: String(ozHostPort),
+      E2E_STACK_CONFIG_DIR: stackDir,
+      E2E_OZ_RELAYER_API_KEY: E2E_OZ_API_KEY,
+      OZ_KEYSTORE_PASSPHRASE: process.env.OZ_KEYSTORE_PASSPHRASE ?? "change-me",
+      OZ_STORAGE_ENCRYPTION_KEY: process.env.OZ_STORAGE_ENCRYPTION_KEY ?? "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      OZ_RELAYER_UID: String(typeof process.getuid === "function" ? process.getuid() : 1000),
+      OZ_RELAYER_GID: String(typeof process.getgid === "function" ? process.getgid() : 1000),
+    });
+
+    const failWithLogs = (msg: string): never => {
+      let logs = "(could not fetch logs)";
+      try {
+        logs = dockerComposeLogs(repoRoot, project, composeEnv());
+      } catch {
+        // keep fallback
+      }
+      throw new Error(`${msg}\n--- docker compose logs ---\n${logs}`);
+    };
+
+    const publicClient = createPublicClient({ chain, transport: http(anvilHostRpc) });
+    const permitAmount = 1_000_000n;
+    const permitAmountStr = permitAmount.toString();
+
+    try {
+      forgeBuildFullStackFixtures(repoRoot);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "anvil"], composeEnv());
+      await waitForJsonRpcChainId(anvilHostRpc, CHAIN_ID_HEX, 45_000);
+      await setERC1820RegistryCode({ repoRoot, rpcUrl: anvilHostRpc });
+      await setPermit2OnAnvil({ repoRoot, rpcUrl: anvilHostRpc });
+
+      const relayerSigner = privateKeyToAccount(RELAYER_SIGNER_PRIVATE_KEY);
+      const requestSigner = privateKeyToAccount(E2E_REQUEST_SIGNER_PK);
+
+      const deployed = await deployFullStackE2EContractsOnAnvil({
+        repoRoot,
+        relayerSigner: relayerSigner.address,
+        rpcUrl: anvilHostRpc,
+      });
+
+      await fundNativeBalance(anvilHostRpc, deployed.relayerSigner, 50n * 10n ** 18n);
+      await fundNativeBalance(anvilHostRpc, requestSigner.address, 10n * 10n ** 18n);
+      await mintTestToken({
+        rpcUrl: anvilHostRpc,
+        token: deployed.underlyingToken,
+        to: requestSigner.address,
+        amount: permitAmount,
+      });
+      await approveErc20({
+        rpcUrl: anvilHostRpc,
+        token: deployed.underlyingToken,
+        ownerPrivateKey: E2E_REQUEST_SIGNER_PK,
+        spender: CANONICAL_PERMIT2_ADDRESS,
+        amount: permitAmount,
+      });
+
+      ensureAnvilKeystore(repoRoot, join(stackDir, "keys"));
+      writeOzRelayerConfig(stackDir);
+      writeProviderRegistry(stackDir, deployed.forwarderAddress, deployed.macroAddress);
+      chmodStackTree(stackDir);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "redis"], composeEnv());
+      runDockerCompose(repoRoot, project, ["up", "-d", "oz-relayer"], composeEnv());
+      await waitForOzRelayerReady(ozHostBase, 120_000);
+      runDockerCompose(repoRoot, project, ["up", "-d", "app"], composeEnv());
+
+      await waitForHttpOk(`${appBase}/healthz`, 120_000);
+      await waitForReadyz(appBase, 120_000);
+
+      const balanceBefore = await readSuperTokenBalance({
+        rpcUrl: anvilHostRpc,
+        superToken: deployed.wrapperSuperToken,
+        account: requestSigner.address,
+      });
+
+      const salt = randomBytes(32);
+      const nonce = await publicClient.readContract({
+        address: deployed.forwarderAddress,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getNonce",
+        args: [requestSigner.address, 0n],
+      });
+
+      const actionParams = encodeAbiParameters([{ type: "bytes32", name: "salt" }], [`0x${salt.toString("hex")}` as Hex]);
+      const payload = encodeAbiParameters(clearMacroPayloadAbiParameters, [
+        {
+          action: { params: actionParams },
+          security: {
+            domain: "e2e",
+            macroContract: deployed.macroAddress,
+            provider: "macros.superfluid.eth",
+            validAfter: 0n,
+            validBefore: 0n,
+            nonce,
+          },
+        },
+      ]) as Hex;
+
+      const relayBody = await buildImpliedUpgradePermit2RelayPayload({
+        publicClient,
+        forwarderAddress: deployed.forwarderAddress,
+        macroAddress: deployed.macroAddress,
+        payload,
+        signer: requestSigner,
+        chainId: 31337,
+        underlyingToken: deployed.underlyingToken,
+        wrapperSuperToken: deployed.wrapperSuperToken,
+        permitAmount: permitAmountStr,
+        permitNonce: "42",
+      });
+
+      expect(relayBody.permit2.spender.toLowerCase()).toBe(deployed.forwarderAddress.toLowerCase());
+      expect(relayBody.permit2.upgradeSuperToken.toLowerCase()).toBe(deployed.wrapperSuperToken.toLowerCase());
+
+      const postRes = await fetch(`${appBase}/v1/relay-executions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(relayBody),
+      });
+      expect(postRes.status).toBe(202);
+      const created = (await postRes.json()) as {
+        state: string;
+        kind: string;
+        links: { self: string };
+      };
+      expect(created.state).toBe("pending");
+      expect(created.kind).toBe("clearMacroPermit2V1");
+
+      const final = await pollUntilSucceededWithReceipt(`${appBase}${created.links.self}`, 180_000);
+      expect(final.receipt.status).toBe("success");
+
+      const balanceAfter = await readSuperTokenBalance({
+        rpcUrl: anvilHostRpc,
+        superToken: deployed.wrapperSuperToken,
+        account: requestSigner.address,
+      });
+      expect(balanceAfter - balanceBefore).toBe(permitAmount);
     } catch (error) {
       failWithLogs(error instanceof Error ? error.message : String(error));
     } finally {

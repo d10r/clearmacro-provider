@@ -1,4 +1,5 @@
 import { sha256HexUtf8 } from "../db/repositories.js";
+import type { Permit2RequestInput } from "../chain/permit2.js";
 
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -16,7 +17,43 @@ function sortValue(value: unknown): unknown {
   return value;
 }
 
-export type CanonicalCreateBodyInput = {
+const sharedFields = (body: {
+  chainId: number;
+  macroAddress: string;
+  signerAddress: string;
+  payload: string;
+  value?: string;
+  forceExecuteAfterPreflightRevert?: boolean;
+  clientRequestId?: string | null;
+  metadata?: Record<string, string>;
+}) => ({
+  chainId: body.chainId,
+  macroAddress: body.macroAddress.toLowerCase(),
+  signerAddress: body.signerAddress.toLowerCase(),
+  payload: body.payload,
+  value: body.value ?? "0",
+  forceExecuteAfterPreflightRevert: body.forceExecuteAfterPreflightRevert ?? false,
+  clientRequestId: body.clientRequestId ?? null,
+  metadata: sortValue(body.metadata ?? {}),
+});
+
+function canonicalPermit2(permit2: Permit2RequestInput) {
+  return {
+    permit: {
+      permitted: {
+        token: permit2.permit.permitted.token.toLowerCase(),
+        amount: permit2.permit.permitted.amount,
+      },
+      nonce: permit2.permit.nonce,
+      deadline: permit2.permit.deadline,
+    },
+    spender: permit2.spender.toLowerCase(),
+    upgradeSuperToken: permit2.upgradeSuperToken.toLowerCase(),
+    signature: permit2.signature,
+  };
+}
+
+export type ClearMacroV1CreateBodyInput = {
   kind: "clearMacroV1";
   chainId: number;
   macroAddress: string;
@@ -29,19 +66,36 @@ export type CanonicalCreateBodyInput = {
   metadata?: Record<string, string>;
 };
 
+export type ClearMacroPermit2V1CreateBodyInput = {
+  kind: "clearMacroPermit2V1";
+  chainId: number;
+  macroAddress: string;
+  signerAddress: string;
+  payload: string;
+  permit2: Permit2RequestInput;
+  value?: string;
+  forceExecuteAfterPreflightRevert?: boolean;
+  clientRequestId?: string | null;
+  metadata?: Record<string, string>;
+};
+
+export type CanonicalCreateBodyInput =
+  | ClearMacroV1CreateBodyInput
+  | ClearMacroPermit2V1CreateBodyInput;
+
 export function canonicalCreateBodyJson(body: CanonicalCreateBodyInput): string {
-  const normalized: Record<string, unknown> = {
-    kind: body.kind,
-    chainId: body.chainId,
-    macroAddress: body.macroAddress.toLowerCase(),
-    signerAddress: body.signerAddress.toLowerCase(),
-    payload: body.payload,
-    signature: body.signature,
-    value: body.value ?? "0",
-    forceExecuteAfterPreflightRevert: body.forceExecuteAfterPreflightRevert ?? false,
-    clientRequestId: body.clientRequestId ?? null,
-    metadata: sortValue(body.metadata ?? {}),
-  };
+  const normalized =
+    body.kind === "clearMacroV1"
+      ? {
+          kind: body.kind,
+          ...sharedFields(body),
+          signature: body.signature,
+        }
+      : {
+          kind: body.kind,
+          ...sharedFields(body),
+          permit2: canonicalPermit2(body.permit2),
+        };
   return JSON.stringify(sortValue(normalized));
 }
 

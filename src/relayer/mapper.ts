@@ -57,7 +57,7 @@ export function projectRelayerState(input: RelayerProjectionInput): RelayerProje
     return { state: hasHash ? "submitted" : "pending" };
   }
   if (status === "confirmed") {
-    return { state: "succeeded" };
+    return { state: hasHash ? "submitted" : "pending" };
   }
   if (status === "failed") {
     if (isRevertReason(input.statusReason)) {

@@ -9,6 +9,10 @@ describe("normalizeOzReceipt", () => {
     ["1", "success"],
     ["0x1", "success"],
     [1, "success"],
+    ["success", "success"],
+    ["succeeded", "success"],
+    ["reverted", "reverted"],
+    ["failed", "reverted"],
   ] as const)("maps status %s to %s", (status, expected) => {
     const r = normalizeOzReceipt({
       transactionHash: "0x" + "ab".repeat(32),

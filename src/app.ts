@@ -34,11 +34,22 @@ export type AppDeps = {
   getForwarderDigest: RegisterRoutesDeps["getForwarderDigest"];
   validateRelaySignature: RegisterRoutesDeps["validateRelaySignature"];
   preflightRunMacro?: RegisterRoutesDeps["preflightRunMacro"];
+  getPermit2WitnessStructHash?: RegisterRoutesDeps["getPermit2WitnessStructHash"];
+  getPermit2WitnessTypeString?: RegisterRoutesDeps["getPermit2WitnessTypeString"];
+  getPermit2DomainSeparator?: RegisterRoutesDeps["getPermit2DomainSeparator"];
+  preflightRunPermit2AndMacro?: RegisterRoutesDeps["preflightRunPermit2AndMacro"];
   metrics?: AppMetrics;
 };
 
 export async function createApp(deps: AppDeps) {
-  const app = Fastify({ logger: { level: deps.logLevel } });
+  const app = Fastify({
+    logger: { level: deps.logLevel },
+    ajv: {
+      customOptions: {
+        removeAdditional: false,
+      },
+    },
+  });
   const metrics = deps.metrics ?? createMetrics();
 
   await app.register(swagger, {
@@ -130,6 +141,18 @@ export async function createApp(deps: AppDeps) {
     validateRelaySignature: deps.validateRelaySignature,
     ...(deps.preflightRunMacro !== undefined
       ? { preflightRunMacro: deps.preflightRunMacro }
+      : {}),
+    ...(deps.getPermit2WitnessStructHash !== undefined
+      ? { getPermit2WitnessStructHash: deps.getPermit2WitnessStructHash }
+      : {}),
+    ...(deps.getPermit2WitnessTypeString !== undefined
+      ? { getPermit2WitnessTypeString: deps.getPermit2WitnessTypeString }
+      : {}),
+    ...(deps.getPermit2DomainSeparator !== undefined
+      ? { getPermit2DomainSeparator: deps.getPermit2DomainSeparator }
+      : {}),
+    ...(deps.preflightRunPermit2AndMacro !== undefined
+      ? { preflightRunPermit2AndMacro: deps.preflightRunPermit2AndMacro }
       : {}),
   });
 

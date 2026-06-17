@@ -14,7 +14,7 @@ import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { createApp } from "./app.js";
 import { createReadyzReadinessCache } from "./chain/readinessCache.js";
 import { startRelayerSignerBalanceSampler } from "./chain/relayerBalanceSampler.js";
-import { evaluateChainReadiness, getForwarderDigest, validateRelaySignature } from "./chain/readiness.js";
+import { evaluateChainReadiness, getForwarderDigest, getPermit2DomainSeparator, getPermit2WitnessStructHash, getPermit2WitnessTypeString, validateRelaySignature } from "./chain/readiness.js";
 import { createMetrics } from "./metrics/metrics.js";
 
 async function main(): Promise<void> {
@@ -81,6 +81,24 @@ async function main(): Promise<void> {
         digest: input.digest,
         signature: input.signature,
       }),
+    getPermit2WitnessStructHash: (input) =>
+      getPermit2WitnessStructHash({
+        registry,
+        chainId: input.chainId,
+        forwarder: input.forwarder,
+        macro: input.macro,
+        encodedPayload: input.encodedPayload,
+        upgradeSuperToken: input.upgradeSuperToken,
+      }),
+    getPermit2WitnessTypeString: (input) =>
+      getPermit2WitnessTypeString({
+        registry,
+        chainId: input.chainId,
+        forwarder: input.forwarder,
+        macro: input.macro,
+        encodedPayload: input.encodedPayload,
+      }),
+    getPermit2DomainSeparator: (chain) => getPermit2DomainSeparator(chain),
   });
 
   for (const chain of registry.chainsById.values()) {

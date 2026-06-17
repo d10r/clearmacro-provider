@@ -4,7 +4,23 @@ import type { RegistryChain } from "../config/schema.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import { OzRelayerRateLimitError } from "../relayer/errors.js";
 import { clearMacroForwarderV1Abi } from "./clearMacroForwarderV1Abi.js";
+import {
+  buildPermit2Context,
+  PERMIT2_ADDRESS,
+  type Permit2Context,
+  type StoredPermit2Json,
+} from "./permit2.js";
 import { validateEoaSignature } from "../validation/clearmacro.js";
+
+const permit2Abi = [
+  {
+    type: "function",
+    name: "DOMAIN_SEPARATOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+] as const;
 
 const erc1271Abi = [
   {
@@ -96,6 +112,99 @@ export async function getForwarderDigest(
   });
 }
 
+export async function getPermit2WitnessStructHash(
+  input: ClearMacroForwarderPayload & {
+    registry: LoadedRegistry;
+    chainId: number;
+    upgradeSuperToken: string;
+  },
+): Promise<`0x${string}`> {
+  const chain = input.registry.chainsById.get(input.chainId);
+  if (!chain) {
+    throw new Error("Chain not found");
+  }
+  return withRpcFallback(chain, async (client) =>
+    client.readContract({
+      address: input.forwarder as `0x${string}`,
+      abi: clearMacroForwarderV1Abi,
+      functionName: "getPermit2WitnessStructHash",
+      args: [
+        input.macro as `0x${string}`,
+        input.encodedPayload as `0x${string}`,
+        input.upgradeSuperToken as `0x${string}`,
+      ],
+    }),
+  );
+}
+
+export async function getPermit2WitnessTypeString(
+  input: ClearMacroForwarderPayload & {
+    registry: LoadedRegistry;
+    chainId: number;
+  },
+): Promise<string> {
+  const chain = input.registry.chainsById.get(input.chainId);
+  if (!chain) {
+    throw new Error("Chain not found");
+  }
+  return withRpcFallback(chain, async (client) =>
+    client.readContract({
+      address: input.forwarder as `0x${string}`,
+      abi: clearMacroForwarderV1Abi,
+      functionName: "getPermit2WitnessTypeString",
+      args: [input.macro as `0x${string}`, input.encodedPayload as `0x${string}`],
+    }),
+  );
+}
+
+export async function getPermit2DomainSeparator(
+  chain: RegistryChain,
+): Promise<`0x${string}`> {
+  return withRpcFallback(chain, async (client) =>
+    client.readContract({
+      address: PERMIT2_ADDRESS,
+      abi: permit2Abi,
+      functionName: "DOMAIN_SEPARATOR",
+    }),
+  );
+}
+
+export async function resolvePermit2Context(input: {
+  chain: RegistryChain;
+  forwarder: string;
+  macro: string;
+  encodedPayload: string;
+  owner: string;
+  permit2: StoredPermit2Json;
+}): Promise<Permit2Context> {
+  const witness = await withRpcFallback(input.chain, async (client) =>
+    client.readContract({
+      address: input.forwarder as `0x${string}`,
+      abi: clearMacroForwarderV1Abi,
+      functionName: "getPermit2WitnessStructHash",
+      args: [
+        input.macro as `0x${string}`,
+        input.encodedPayload as `0x${string}`,
+        input.permit2.upgradeSuperToken as `0x${string}`,
+      ],
+    }),
+  );
+  const witnessTypeString = await withRpcFallback(input.chain, async (client) =>
+    client.readContract({
+      address: input.forwarder as `0x${string}`,
+      abi: clearMacroForwarderV1Abi,
+      functionName: "getPermit2WitnessTypeString",
+      args: [input.macro as `0x${string}`, input.encodedPayload as `0x${string}`],
+    }),
+  );
+  return buildPermit2Context({
+    permit2: input.permit2,
+    owner: input.owner,
+    witness,
+    witnessTypeString,
+  });
+}
+
 export type ChainReadinessReasonCode = "PROVIDER_NOT_READY" | "RELAYER_UNAVAILABLE" | "RELAYER_RATE_LIMITED";
 
 export type ChainReadinessResult = { ready: boolean; reasonCode?: ChainReadinessReasonCode };
@@ -173,12 +282,51 @@ export async function preflightRunMacro(
     });
     return "ok";
   } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : "";
-    if (message.includes("revert") || message.includes("execution reverted") || message.includes("receipt status: failed")) {
-      return "deterministic_revert";
-    }
-    return "rpc_unavailable";
+    return classifyPreflightError(error);
   }
+}
+
+export async function preflightRunPermit2AndMacro(
+  input: ClearMacroForwarderPayload & {
+    chain: RegistryChain;
+    relayerSigner: string;
+    permit2Context: Permit2Context;
+    msgValue: string;
+  },
+): Promise<"ok" | "deterministic_revert" | "rpc_unavailable"> {
+  try {
+    await withRpcFallback(input.chain, async (client) => {
+      await client.simulateContract({
+        address: input.forwarder as `0x${string}`,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "runPermit2AndMacro",
+        args: [
+          input.permit2Context,
+          input.macro as `0x${string}`,
+          input.encodedPayload as `0x${string}`,
+        ],
+        account: input.relayerSigner as `0x${string}`,
+        value: BigInt(input.msgValue),
+      });
+    });
+    return "ok";
+  } catch (error) {
+    return classifyPreflightError(error);
+  }
+}
+
+function classifyPreflightError(
+  error: unknown,
+): "deterministic_revert" | "rpc_unavailable" {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (
+    message.includes("revert") ||
+    message.includes("execution reverted") ||
+    message.includes("receipt status: failed")
+  ) {
+    return "deterministic_revert";
+  }
+  return "rpc_unavailable";
 }
 
 export async function evaluateChainReadiness(input: {

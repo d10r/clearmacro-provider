@@ -6,9 +6,18 @@ import type {
 import type { OzRelayerClient } from "./client.js";
 import { OzRelayerHttpError, OzRelayerRateLimitError } from "./errors.js";
 import { projectRelayerState } from "./mapper.js";
-import { buildRunMacroCalldata } from "../tx/builder.js";
+import { buildRunMacroCalldata, buildRunPermit2AndMacroCalldata } from "../tx/builder.js";
 import type { LoadedRegistry } from "../config/registry.js";
-import { preflightRunMacro, type ClearMacroForwarderCall } from "../chain/readiness.js";
+import {
+  preflightRunMacro,
+  preflightRunPermit2AndMacro,
+  resolvePermit2Context,
+  withRpcFallback,
+  type ClearMacroForwarderCall,
+} from "../chain/readiness.js";
+import type { RegistryChain } from "../config/schema.js";
+import type { OzTransaction } from "./client.js";
+import { parseStoredPermit2Json, type Permit2Context } from "../chain/permit2.js";
 import type { RelayExecutionReceipt } from "../db/repositories.js";
 import { normalizeOzReceipt, type RawOzReceipt } from "./receiptNormalize.js";
 
@@ -30,7 +39,79 @@ export type RelayerWorkerDeps = {
       msgValue: string;
     },
   ) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
+  preflightPermit2Simulation?: (
+    input: Parameters<typeof preflightRunPermit2AndMacro>[0],
+  ) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
+  resolvePermit2Context?: typeof resolvePermit2Context;
 };
+
+function failPermit2State(
+  deps: RelayerWorkerDeps,
+  executionId: string,
+  message: string,
+): void {
+  deps.executions.transitionState(executionId, "failed", {
+    errorJson: JSON.stringify({
+      code: "INVALID_PERMIT2_STATE",
+      message,
+      category: "provider",
+      retryable: false,
+    }),
+  });
+}
+
+async function loadPermit2Context(
+  deps: RelayerWorkerDeps,
+  execution: {
+    id: string;
+    permit2Json: string | null;
+    forwarderAddress: string;
+    macroAddress: string;
+    payload: string;
+    signerAddress: string;
+  },
+  chain: LoadedRegistry["raw"]["chains"][number],
+): Promise<Permit2Context | "retry" | "failed"> {
+  if (!execution.permit2Json) {
+    failPermit2State(
+      deps,
+      execution.id,
+      "Permit2 execution is missing permit2_json.",
+    );
+    return "failed";
+  }
+  let permit2;
+  try {
+    permit2 = parseStoredPermit2Json(execution.permit2Json);
+  } catch {
+    failPermit2State(
+      deps,
+      execution.id,
+      "Permit2 execution has malformed permit2_json.",
+    );
+    return "failed";
+  }
+  const resolve = deps.resolvePermit2Context ?? resolvePermit2Context;
+  try {
+    return await resolve({
+      chain,
+      forwarder: execution.forwarderAddress,
+      macro: execution.macroAddress,
+      encodedPayload: execution.payload,
+      owner: execution.signerAddress,
+      permit2,
+    });
+  } catch {
+    deps.executionEvents.append({
+      executionId: execution.id,
+      type: "preflight_retry_scheduled",
+      actor: "worker",
+      reason: "Permit2 witness derivation RPC unavailable; will retry",
+      detailsJson: JSON.stringify({ retry: true }),
+    });
+    return "retry";
+  }
+}
 
 function isTransientSubmitError(error: unknown): boolean {
   if (error instanceof OzRelayerRateLimitError) {
@@ -69,6 +150,63 @@ function getSubmitAttemptsFromErrorJson(value: string | null): number {
   return 0;
 }
 
+function receiptFromOzPayload(
+  receipt: NonNullable<OzTransaction["receipt"]>,
+): RelayExecutionReceipt {
+  const raw: RawOzReceipt = {
+    transactionHash: receipt.transactionHash,
+    blockNumber: receipt.blockNumber,
+    status: receipt.status,
+  };
+  if (receipt.blockHash !== undefined) {
+    raw.blockHash = receipt.blockHash;
+  }
+  if (receipt.gasUsed !== undefined) {
+    raw.gasUsed = receipt.gasUsed;
+  }
+  return normalizeOzReceipt(raw);
+}
+
+async function resolveExecutionReceipt(
+  chain: RegistryChain | undefined,
+  tx: OzTransaction,
+): Promise<RelayExecutionReceipt | null> {
+  if (tx.receipt) {
+    return receiptFromOzPayload(tx.receipt);
+  }
+  if (!chain || !tx.hash) {
+    return null;
+  }
+  const status = tx.status.toLowerCase();
+  if (status !== "confirmed" && status !== "mined") {
+    return null;
+  }
+  try {
+    return await withRpcFallback(chain, async (client) => {
+      const onchain = await client.getTransactionReceipt({
+        hash: tx.hash as `0x${string}`,
+      });
+      if (!onchain) {
+        return null;
+      }
+      const raw: RawOzReceipt = {
+        transactionHash: onchain.transactionHash,
+        blockNumber: onchain.blockNumber,
+        status: onchain.status,
+      };
+      if (onchain.blockHash) {
+        raw.blockHash = onchain.blockHash;
+      }
+      if (onchain.gasUsed !== undefined) {
+        raw.gasUsed = onchain.gasUsed;
+      }
+      return normalizeOzReceipt(raw);
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function processRelayerWorkerTick(
   deps: RelayerWorkerDeps,
 ): Promise<void> {
@@ -91,47 +229,96 @@ export async function processRelayerWorkerTick(
       const relayer = await deps.relayerClient.getRelayer(
         execution.ozRelayerId,
       );
+      let permit2Context: Permit2Context | undefined;
       const skipPreflight = execution.forceAfterPreflightRevert === 1;
       if (!skipPreflight) {
-        const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
-        const preflight = await preflightFn({
-          chain,
-          forwarder: execution.forwarderAddress,
-          macro: execution.macroAddress,
-          encodedPayload: execution.payload,
-          signer: execution.signerAddress,
-          relayerSigner: relayer.address,
-          signature: execution.signature,
-          msgValue: execution.value,
-        });
-        if (preflight === "deterministic_revert") {
-          deps.executions.transitionState(execution.id, "rejected", {
-            errorJson: JSON.stringify({
-              code: "PREFLIGHT_REVERTED",
-              message:
-                "Post-creation safety check predicted revert before submission.",
-              category: "user",
-              retryable: false,
-            }),
+        if (execution.kind === "clearMacroPermit2V1") {
+          const loaded = await loadPermit2Context(deps, execution, chain);
+          if (loaded === "failed" || loaded === "retry") {
+            continue;
+          }
+          permit2Context = loaded;
+          const preflightFn =
+            deps.preflightPermit2Simulation ?? preflightRunPermit2AndMacro;
+          const preflight = await preflightFn({
+            chain,
+            forwarder: execution.forwarderAddress,
+            macro: execution.macroAddress,
+            encodedPayload: execution.payload,
+            relayerSigner: relayer.address,
+            permit2Context,
+            msgValue: execution.value,
           });
-          deps.executionEvents.append({
-            executionId: execution.id,
-            type: "terminal_error_set",
-            actor: "worker",
-            reason: "Deterministic preflight revert",
-            detailsJson: JSON.stringify({}),
+          if (preflight === "deterministic_revert") {
+            deps.executions.transitionState(execution.id, "rejected", {
+              errorJson: JSON.stringify({
+                code: "PREFLIGHT_REVERTED",
+                message:
+                  "Post-creation safety check predicted revert before submission.",
+                category: "user",
+                retryable: false,
+              }),
+            });
+            deps.executionEvents.append({
+              executionId: execution.id,
+              type: "terminal_error_set",
+              actor: "worker",
+              reason: "Deterministic preflight revert",
+              detailsJson: JSON.stringify({}),
+            });
+            continue;
+          }
+          if (preflight === "rpc_unavailable") {
+            deps.executionEvents.append({
+              executionId: execution.id,
+              type: "preflight_retry_scheduled",
+              actor: "worker",
+              reason: "Preflight RPC unavailable; will retry",
+              detailsJson: JSON.stringify({ retry: true }),
+            });
+            continue;
+          }
+        } else {
+          const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
+          const preflight = await preflightFn({
+            chain,
+            forwarder: execution.forwarderAddress,
+            macro: execution.macroAddress,
+            encodedPayload: execution.payload,
+            signer: execution.signerAddress,
+            relayerSigner: relayer.address,
+            signature: execution.signature,
+            msgValue: execution.value,
           });
-          continue;
-        }
-        if (preflight === "rpc_unavailable") {
-          deps.executionEvents.append({
-            executionId: execution.id,
-            type: "preflight_retry_scheduled",
-            actor: "worker",
-            reason: "Preflight RPC unavailable; will retry",
-            detailsJson: JSON.stringify({ retry: true }),
-          });
-          continue;
+          if (preflight === "deterministic_revert") {
+            deps.executions.transitionState(execution.id, "rejected", {
+              errorJson: JSON.stringify({
+                code: "PREFLIGHT_REVERTED",
+                message:
+                  "Post-creation safety check predicted revert before submission.",
+                category: "user",
+                retryable: false,
+              }),
+            });
+            deps.executionEvents.append({
+              executionId: execution.id,
+              type: "terminal_error_set",
+              actor: "worker",
+              reason: "Deterministic preflight revert",
+              detailsJson: JSON.stringify({}),
+            });
+            continue;
+          }
+          if (preflight === "rpc_unavailable") {
+            deps.executionEvents.append({
+              executionId: execution.id,
+              type: "preflight_retry_scheduled",
+              actor: "worker",
+              reason: "Preflight RPC unavailable; will retry",
+              detailsJson: JSON.stringify({ retry: true }),
+            });
+            continue;
+          }
         }
       }
 
@@ -156,17 +343,35 @@ export async function processRelayerWorkerTick(
         continue;
       }
 
+      let txData: string;
+      if (execution.kind === "clearMacroPermit2V1") {
+        if (!permit2Context) {
+          const loaded = await loadPermit2Context(deps, execution, chain);
+          if (loaded === "failed" || loaded === "retry") {
+            continue;
+          }
+          permit2Context = loaded;
+        }
+        txData = buildRunPermit2AndMacroCalldata({
+          permit2Context,
+          macro: execution.macroAddress,
+          encodedPayload: execution.payload,
+        });
+      } else {
+        txData = buildRunMacroCalldata({
+          macro: execution.macroAddress,
+          encodedPayload: execution.payload,
+          signer: execution.signerAddress,
+          signature: execution.signature,
+        });
+      }
+
       const tx = await deps.relayerClient.submitTransaction(
         execution.ozRelayerId,
         {
           to: execution.forwarderAddress,
           value: execution.value,
-          data: buildRunMacroCalldata({
-            macro: execution.macroAddress,
-            encodedPayload: execution.payload,
-            signer: execution.signerAddress,
-            signature: execution.signature,
-          }),
+          data: txData,
           speed: "fast",
         },
       );
@@ -259,11 +464,13 @@ export async function processRelayerWorkerTick(
       if (!execution.ozTransactionId) {
         continue;
       }
+      const chain = deps.registry.chainsById.get(execution.chainId);
       try {
         const tx = await deps.relayerClient.getTransaction(
           execution.ozRelayerId,
           execution.ozTransactionId,
         );
+        const receipt = await resolveExecutionReceipt(chain, tx);
         deps.relayerTransactions.upsert({
           ozTransactionId: tx.id,
           executionId: execution.id,
@@ -280,7 +487,7 @@ export async function processRelayerWorkerTick(
           submittedAt: tx.sent_at,
           includedAt: tx.mined_at ?? null,
           confirmedAt: tx.confirmed_at,
-          receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
+          receiptJson: receipt ? JSON.stringify(receipt) : null,
           lastPolledAt: new Date().toISOString(),
         });
         if (tx.hash && tx.hash !== execution.currentTransactionHash) {
@@ -306,22 +513,6 @@ export async function processRelayerWorkerTick(
           ) {
             deps.executions.transitionState(refreshed.id, "submitted");
           }
-        }
-
-        let receipt: RelayExecutionReceipt | null = null;
-        if (tx.receipt) {
-          const raw: RawOzReceipt = {
-            transactionHash: tx.receipt.transactionHash,
-            blockNumber: tx.receipt.blockNumber,
-            status: tx.receipt.status,
-          };
-          if (tx.receipt.blockHash !== undefined) {
-            raw.blockHash = tx.receipt.blockHash;
-          }
-          if (tx.receipt.gasUsed !== undefined) {
-            raw.gasUsed = tx.receipt.gasUsed;
-          }
-          receipt = normalizeOzReceipt(raw);
         }
 
         const projected = projectRelayerState({

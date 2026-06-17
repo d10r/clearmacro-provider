@@ -29,10 +29,16 @@ export type HarnessOverrides = {
   getForwarderDigest?: AppDeps["getForwarderDigest"];
   validateRelaySignature?: AppDeps["validateRelaySignature"];
   preflightRunMacro?: AppDeps["preflightRunMacro"];
+  getPermit2WitnessStructHash?: AppDeps["getPermit2WitnessStructHash"];
+  getPermit2WitnessTypeString?: AppDeps["getPermit2WitnessTypeString"];
+  getPermit2DomainSeparator?: AppDeps["getPermit2DomainSeparator"];
+  preflightRunPermit2AndMacro?: AppDeps["preflightRunPermit2AndMacro"];
   macroPolicyMode?: "allowlist" | "open";
 };
 
 const defaultPreflightOk: NonNullable<AppDeps["preflightRunMacro"]> = async () => "ok";
+const defaultPermit2PreflightOk: NonNullable<AppDeps["preflightRunPermit2AndMacro"]> =
+  async () => "ok";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -130,6 +136,16 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
     getForwarderDigest: overrides?.getForwarderDigest ?? (async () => `0x${"11".repeat(32)}`),
     validateRelaySignature: overrides?.validateRelaySignature ?? (async () => true),
     preflightRunMacro: overrides?.preflightRunMacro ?? defaultPreflightOk,
+    getPermit2WitnessStructHash:
+      overrides?.getPermit2WitnessStructHash ??
+      (async () => `0x${"22".repeat(32)}`),
+    getPermit2WitnessTypeString:
+      overrides?.getPermit2WitnessTypeString ?? (async () => "witness-type"),
+    getPermit2DomainSeparator:
+      overrides?.getPermit2DomainSeparator ??
+      (async () => `0x${"33".repeat(32)}`),
+    preflightRunPermit2AndMacro:
+      overrides?.preflightRunPermit2AndMacro ?? defaultPermit2PreflightOk,
   });
   return {
     dir,
