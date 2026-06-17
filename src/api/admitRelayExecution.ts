@@ -19,6 +19,7 @@ import {
   isImpliedUpgradeMode,
   normalizePermit2Request,
   type Permit2RequestInput,
+  type StoredPermit2Json,
 } from "../chain/permit2.js";
 import type { RegistryChain } from "../config/schema.js";
 
@@ -53,17 +54,17 @@ type SharedAdmissionContext = {
 
 type AdmitDeps = RegisterRoutesDeps & {
   preflightRunMacro: NonNullable<RegisterRoutesDeps["preflightRunMacro"]>;
-  getPermit2WitnessStructHash?: (
-    input: Parameters<RegisterRoutesDeps["getForwarderDigest"]>[0] & {
-      upgradeSuperToken: string;
-    },
-  ) => Promise<string>;
-  getPermit2WitnessTypeString?: (
-    input: Parameters<RegisterRoutesDeps["getForwarderDigest"]>[0],
-  ) => Promise<string>;
-  getPermit2DomainSeparator?: (chain: RegistryChain) => Promise<string>;
-  preflightRunPermit2AndMacro?: typeof preflightRunPermit2AndMacro;
 };
+
+type PreflightResult = "ok" | "deterministic_revert" | "rpc_unavailable";
+
+type PreflightOutcome =
+  | { metadata: Record<string, string>; forceAfterPreflightRevert: number }
+  | { error: ApiError };
+type SuccessfulPreflightOutcome = Exclude<
+  PreflightOutcome,
+  { error: ApiError }
+>;
 
 export type AdmitRelayExecutionResult =
   | { statusCode: 200 | 202; row: RelayExecutionRow }
@@ -391,12 +392,12 @@ function replayOrConflict(
   };
 }
 
-async function applyPreflightOutcome(
+function applyPreflightOutcome(
   deps: AdmitDeps,
   ctx: SharedAdmissionContext,
   digest: string,
-  preflightResult: "ok" | "deterministic_revert" | "rpc_unavailable",
-): Promise<{ metadata: Record<string, string>; forceAfterPreflightRevert: number } | { error: ApiError }> {
+  preflightResult: PreflightResult,
+): PreflightOutcome {
   if (preflightResult === "rpc_unavailable") {
     audit(deps, ctx.auditBase, "CHAIN_UNAVAILABLE", null, digest);
     return {
@@ -431,6 +432,85 @@ async function applyPreflightOutcome(
     forceAfterPreflightRevert:
       preflightResult === "deterministic_revert" && forceRequested ? 1 : 0,
   };
+}
+
+async function validateDigestSignature(
+  deps: AdmitDeps,
+  ctx: SharedAdmissionContext,
+  digest: string,
+  signature: string,
+  messages: {
+    unavailable: string;
+    invalid: string;
+  },
+): Promise<ApiError | null> {
+  let validSignature: boolean;
+  try {
+    validSignature = await deps.validateRelaySignature({
+      chainId: ctx.body.chainId,
+      signer: ctx.body.signerAddress.toLowerCase(),
+      digest,
+      signature,
+    });
+  } catch {
+    audit(deps, ctx.auditBase, "CHAIN_UNAVAILABLE", null, digest);
+    return new ApiError(
+      503,
+      "CHAIN_UNAVAILABLE",
+      messages.unavailable,
+      "chain",
+      true,
+    );
+  }
+  if (!validSignature) {
+    audit(deps, ctx.auditBase, "SIGNATURE_INVALID", null, digest);
+    return new ApiError(
+      422,
+      "SIGNATURE_INVALID",
+      messages.invalid,
+      "user",
+      false,
+    );
+  }
+  return null;
+}
+
+function persistCreatedExecution(
+  deps: AdmitDeps,
+  ctx: SharedAdmissionContext,
+  digest: string,
+  input: {
+    signature: string;
+    permit2Json: string | null;
+    preflightOutcome: SuccessfulPreflightOutcome;
+  },
+): Promise<AdmitRelayExecutionResult> {
+  return persistExecution(deps, ctx, digest, () =>
+    deps.executions.createPending({
+      clientId: ctx.clientId,
+      clientRequestId: ctx.body.clientRequestId ?? null,
+      requestBodyHash: ctx.auditBase.requestBodyHash,
+      digest,
+      domain: ctx.decoded.domain,
+      kind: ctx.body.kind,
+      chainId: ctx.body.chainId,
+      ozRelayerId: ctx.ozRelayerId,
+      forwarderAddress: ctx.forwarderAddress,
+      macroAddress: ctx.body.macroAddress.toLowerCase(),
+      signerAddress: ctx.body.signerAddress.toLowerCase(),
+      nonce: ctx.decoded.nonce.toString(),
+      validAfter: ctx.decoded.validAfter.toString(),
+      validBefore: ctx.decoded.validBefore.toString(),
+      value: ctx.body.value ?? "0",
+      payload: ctx.body.payload,
+      signature: input.signature,
+      permit2Json: input.permit2Json,
+      metadataJson: JSON.stringify(input.preflightOutcome.metadata),
+      forceAfterPreflightRevert:
+        input.preflightOutcome.forceAfterPreflightRevert,
+      requiredConfirmations: ctx.requiredConfirmations,
+    }),
+  );
 }
 
 async function admitClearMacroV1(
@@ -474,37 +554,18 @@ async function admitClearMacroV1(
   }
   const signature = ctx.body.signature;
 
-  let validSignature: boolean;
-  try {
-    validSignature = await deps.validateRelaySignature({
-      chainId: ctx.body.chainId,
-      signer: ctx.body.signerAddress.toLowerCase(),
-      digest,
-      signature,
-    });
-  } catch {
-    audit(deps, ctx.auditBase, "CHAIN_UNAVAILABLE", null, digest);
-    return {
-      error: new ApiError(
-        503,
-        "CHAIN_UNAVAILABLE",
-        "Unable to validate signature with app RPCs.",
-        "chain",
-        true,
-      ),
-    };
-  }
-  if (!validSignature) {
-    audit(deps, ctx.auditBase, "SIGNATURE_INVALID", null, digest);
-    return {
-      error: new ApiError(
-        422,
-        "SIGNATURE_INVALID",
-        "Signature validation failed for digest and signer.",
-        "user",
-        false,
-      ),
-    };
+  const signatureError = await validateDigestSignature(
+    deps,
+    ctx,
+    digest,
+    signature,
+    {
+      unavailable: "Unable to validate signature with app RPCs.",
+      invalid: "Signature validation failed for digest and signer.",
+    },
+  );
+  if (signatureError) {
+    return { error: signatureError };
   }
 
   const preflightInput: ClearMacroForwarderCall & {
@@ -523,7 +584,7 @@ async function admitClearMacroV1(
     msgValue: ctx.body.value ?? "0",
   };
   const preflightResult = await deps.preflightRunMacro(preflightInput);
-  const preflightOutcome = await applyPreflightOutcome(
+  const preflightOutcome = applyPreflightOutcome(
     deps,
     ctx,
     digest,
@@ -533,31 +594,11 @@ async function admitClearMacroV1(
     return preflightOutcome;
   }
 
-  return persistExecution(deps, ctx, digest, () =>
-    deps.executions.createPending({
-      clientId: ctx.clientId,
-      clientRequestId: ctx.body.clientRequestId ?? null,
-      requestBodyHash: ctx.auditBase.requestBodyHash,
-      digest,
-      domain: ctx.decoded.domain,
-      kind: ctx.body.kind,
-      chainId: ctx.body.chainId,
-      ozRelayerId: ctx.ozRelayerId,
-      forwarderAddress: ctx.forwarderAddress,
-      macroAddress: ctx.body.macroAddress.toLowerCase(),
-      signerAddress: ctx.body.signerAddress.toLowerCase(),
-      nonce: ctx.decoded.nonce.toString(),
-      validAfter: ctx.decoded.validAfter.toString(),
-      validBefore: ctx.decoded.validBefore.toString(),
-      value: ctx.body.value ?? "0",
-      payload: ctx.body.payload,
-      signature,
-      permit2Json: null,
-      metadataJson: JSON.stringify(preflightOutcome.metadata),
-      forceAfterPreflightRevert: preflightOutcome.forceAfterPreflightRevert,
-      requiredConfirmations: ctx.requiredConfirmations,
-    }),
-  );
+  return persistCreatedExecution(deps, ctx, digest, {
+    signature,
+    permit2Json: null,
+    preflightOutcome,
+  });
 }
 
 function validatePermit2Spender(
@@ -596,7 +637,9 @@ async function admitClearMacroPermit2V1(
     return { error: spenderError };
   }
 
-  const storedPermit2 = normalizePermit2Request(ctx.body.permit2);
+  const storedPermit2: StoredPermit2Json = normalizePermit2Request(
+    ctx.body.permit2,
+  );
   const witnessFn = deps.getPermit2WitnessStructHash ?? ((input) =>
     getPermit2WitnessStructHash({
       registry: deps.registry,
@@ -668,37 +711,18 @@ async function admitClearMacroPermit2V1(
     return replayOrConflict(deps, ctx, digest, existing);
   }
 
-  let validSignature: boolean;
-  try {
-    validSignature = await deps.validateRelaySignature({
-      chainId: ctx.body.chainId,
-      signer: ctx.body.signerAddress.toLowerCase(),
-      digest,
-      signature: storedPermit2.signature,
-    });
-  } catch {
-    audit(deps, ctx.auditBase, "CHAIN_UNAVAILABLE", null, digest);
-    return {
-      error: new ApiError(
-        503,
-        "CHAIN_UNAVAILABLE",
-        "Unable to validate Permit2 signature with app RPCs.",
-        "chain",
-        true,
-      ),
-    };
-  }
-  if (!validSignature) {
-    audit(deps, ctx.auditBase, "SIGNATURE_INVALID", null, digest);
-    return {
-      error: new ApiError(
-        422,
-        "SIGNATURE_INVALID",
-        "Signature validation failed for Permit2 digest and signer.",
-        "user",
-        false,
-      ),
-    };
+  const signatureError = await validateDigestSignature(
+    deps,
+    ctx,
+    digest,
+    storedPermit2.signature,
+    {
+      unavailable: "Unable to validate Permit2 signature with app RPCs.",
+      invalid: "Signature validation failed for Permit2 digest and signer.",
+    },
+  );
+  if (signatureError) {
+    return { error: signatureError };
   }
 
   const permit2Context = buildPermit2Context({
@@ -718,7 +742,7 @@ async function admitClearMacroPermit2V1(
     permit2Context,
     msgValue: ctx.body.value ?? "0",
   });
-  const preflightOutcome = await applyPreflightOutcome(
+  const preflightOutcome = applyPreflightOutcome(
     deps,
     ctx,
     digest,
@@ -728,41 +752,15 @@ async function admitClearMacroPermit2V1(
     return preflightOutcome;
   }
 
-  return persistExecution(deps, ctx, digest, () =>
-    deps.executions.createPending({
-      clientId: ctx.clientId,
-      clientRequestId: ctx.body.clientRequestId ?? null,
-      requestBodyHash: ctx.auditBase.requestBodyHash,
-      digest,
-      domain: ctx.decoded.domain,
-      kind: ctx.body.kind,
-      chainId: ctx.body.chainId,
-      ozRelayerId: ctx.ozRelayerId,
-      forwarderAddress: ctx.forwarderAddress,
-      macroAddress: ctx.body.macroAddress.toLowerCase(),
-      signerAddress: ctx.body.signerAddress.toLowerCase(),
-      nonce: ctx.decoded.nonce.toString(),
-      validAfter: ctx.decoded.validAfter.toString(),
-      validBefore: ctx.decoded.validBefore.toString(),
-      value: ctx.body.value ?? "0",
-      payload: ctx.body.payload,
-      signature: storedPermit2.signature,
-      permit2Json: JSON.stringify(storedPermit2),
-      metadataJson: JSON.stringify(preflightOutcome.metadata),
-      forceAfterPreflightRevert: preflightOutcome.forceAfterPreflightRevert,
-      requiredConfirmations: ctx.requiredConfirmations,
-    }),
-  );
+  return persistCreatedExecution(deps, ctx, digest, {
+    signature: storedPermit2.signature,
+    permit2Json: JSON.stringify(storedPermit2),
+    preflightOutcome,
+  });
 }
 
 export async function admitRelayExecution(
-  deps: RegisterRoutesDeps & {
-    preflightRunMacro?: RegisterRoutesDeps["preflightRunMacro"];
-    getPermit2WitnessStructHash?: AdmitDeps["getPermit2WitnessStructHash"];
-    getPermit2WitnessTypeString?: AdmitDeps["getPermit2WitnessTypeString"];
-    getPermit2DomainSeparator?: AdmitDeps["getPermit2DomainSeparator"];
-    preflightRunPermit2AndMacro?: AdmitDeps["preflightRunPermit2AndMacro"];
-  },
+  deps: RegisterRoutesDeps,
   body: CreateRelayExecutionBody,
   clientId: string,
 ): Promise<AdmitRelayExecutionResult> {

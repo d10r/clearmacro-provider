@@ -207,6 +207,45 @@ async function resolveExecutionReceipt(
   }
 }
 
+type PreflightResult = Awaited<ReturnType<typeof preflightRunMacro>>;
+
+function applyPreflightResult(
+  deps: RelayerWorkerDeps,
+  executionId: string,
+  preflight: PreflightResult,
+): "ok" | "continue" {
+  if (preflight === "deterministic_revert") {
+    deps.executions.transitionState(executionId, "rejected", {
+      errorJson: JSON.stringify({
+        code: "PREFLIGHT_REVERTED",
+        message:
+          "Post-creation safety check predicted revert before submission.",
+        category: "user",
+        retryable: false,
+      }),
+    });
+    deps.executionEvents.append({
+      executionId,
+      type: "terminal_error_set",
+      actor: "worker",
+      reason: "Deterministic preflight revert",
+      detailsJson: JSON.stringify({}),
+    });
+    return "continue";
+  }
+  if (preflight === "rpc_unavailable") {
+    deps.executionEvents.append({
+      executionId,
+      type: "preflight_retry_scheduled",
+      actor: "worker",
+      reason: "Preflight RPC unavailable; will retry",
+      detailsJson: JSON.stringify({ retry: true }),
+    });
+    return "continue";
+  }
+  return "ok";
+}
+
 export async function processRelayerWorkerTick(
   deps: RelayerWorkerDeps,
 ): Promise<void> {
@@ -249,33 +288,9 @@ export async function processRelayerWorkerTick(
             permit2Context,
             msgValue: execution.value,
           });
-          if (preflight === "deterministic_revert") {
-            deps.executions.transitionState(execution.id, "rejected", {
-              errorJson: JSON.stringify({
-                code: "PREFLIGHT_REVERTED",
-                message:
-                  "Post-creation safety check predicted revert before submission.",
-                category: "user",
-                retryable: false,
-              }),
-            });
-            deps.executionEvents.append({
-              executionId: execution.id,
-              type: "terminal_error_set",
-              actor: "worker",
-              reason: "Deterministic preflight revert",
-              detailsJson: JSON.stringify({}),
-            });
-            continue;
-          }
-          if (preflight === "rpc_unavailable") {
-            deps.executionEvents.append({
-              executionId: execution.id,
-              type: "preflight_retry_scheduled",
-              actor: "worker",
-              reason: "Preflight RPC unavailable; will retry",
-              detailsJson: JSON.stringify({ retry: true }),
-            });
+          if (
+            applyPreflightResult(deps, execution.id, preflight) === "continue"
+          ) {
             continue;
           }
         } else {
@@ -290,33 +305,9 @@ export async function processRelayerWorkerTick(
             signature: execution.signature,
             msgValue: execution.value,
           });
-          if (preflight === "deterministic_revert") {
-            deps.executions.transitionState(execution.id, "rejected", {
-              errorJson: JSON.stringify({
-                code: "PREFLIGHT_REVERTED",
-                message:
-                  "Post-creation safety check predicted revert before submission.",
-                category: "user",
-                retryable: false,
-              }),
-            });
-            deps.executionEvents.append({
-              executionId: execution.id,
-              type: "terminal_error_set",
-              actor: "worker",
-              reason: "Deterministic preflight revert",
-              detailsJson: JSON.stringify({}),
-            });
-            continue;
-          }
-          if (preflight === "rpc_unavailable") {
-            deps.executionEvents.append({
-              executionId: execution.id,
-              type: "preflight_retry_scheduled",
-              actor: "worker",
-              reason: "Preflight RPC unavailable; will retry",
-              detailsJson: JSON.stringify({ retry: true }),
-            });
+          if (
+            applyPreflightResult(deps, execution.id, preflight) === "continue"
+          ) {
             continue;
           }
         }

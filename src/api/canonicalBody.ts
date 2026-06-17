@@ -1,5 +1,8 @@
 import { sha256HexUtf8 } from "../db/repositories.js";
-import type { Permit2RequestInput } from "../chain/permit2.js";
+import {
+  normalizePermit2Request,
+  type Permit2RequestInput,
+} from "../chain/permit2.js";
 
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -36,22 +39,6 @@ const sharedFields = (body: {
   clientRequestId: body.clientRequestId ?? null,
   metadata: sortValue(body.metadata ?? {}),
 });
-
-function canonicalPermit2(permit2: Permit2RequestInput) {
-  return {
-    permit: {
-      permitted: {
-        token: permit2.permit.permitted.token.toLowerCase(),
-        amount: permit2.permit.permitted.amount,
-      },
-      nonce: permit2.permit.nonce,
-      deadline: permit2.permit.deadline,
-    },
-    spender: permit2.spender.toLowerCase(),
-    upgradeSuperToken: permit2.upgradeSuperToken.toLowerCase(),
-    signature: permit2.signature,
-  };
-}
 
 export type ClearMacroV1CreateBodyInput = {
   kind: "clearMacroV1";
@@ -94,7 +81,7 @@ export function canonicalCreateBodyJson(body: CanonicalCreateBodyInput): string 
       : {
           kind: body.kind,
           ...sharedFields(body),
-          permit2: canonicalPermit2(body.permit2),
+          permit2: normalizePermit2Request(body.permit2),
         };
   return JSON.stringify(sortValue(normalized));
 }

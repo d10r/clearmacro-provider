@@ -28,19 +28,7 @@ export type Permit2RequestInput = {
 };
 
 /** Canonical Permit2 fields persisted in `permit2_json`. */
-export type StoredPermit2Json = {
-  permit: {
-    permitted: {
-      token: string;
-      amount: string;
-    };
-    nonce: string;
-    deadline: string;
-  };
-  spender: string;
-  upgradeSuperToken: string;
-  signature: string;
-};
+export type StoredPermit2Json = ReturnType<typeof normalizePermit2Request>;
 
 export type Permit2Context = {
   permit: {
@@ -69,7 +57,7 @@ export function isImpliedUpgradeMode(upgradeSuperToken: string): boolean {
 
 export function normalizePermit2Request(
   input: Permit2RequestInput,
-): StoredPermit2Json {
+) {
   return {
     permit: {
       permitted: {

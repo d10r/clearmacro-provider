@@ -177,26 +177,31 @@ export async function resolvePermit2Context(input: {
   owner: string;
   permit2: StoredPermit2Json;
 }): Promise<Permit2Context> {
-  const witness = await withRpcFallback(input.chain, async (client) =>
-    client.readContract({
-      address: input.forwarder as `0x${string}`,
-      abi: clearMacroForwarderV1Abi,
-      functionName: "getPermit2WitnessStructHash",
-      args: [
-        input.macro as `0x${string}`,
-        input.encodedPayload as `0x${string}`,
-        input.permit2.upgradeSuperToken as `0x${string}`,
-      ],
-    }),
-  );
-  const witnessTypeString = await withRpcFallback(input.chain, async (client) =>
-    client.readContract({
-      address: input.forwarder as `0x${string}`,
-      abi: clearMacroForwarderV1Abi,
-      functionName: "getPermit2WitnessTypeString",
-      args: [input.macro as `0x${string}`, input.encodedPayload as `0x${string}`],
-    }),
-  );
+  const [witness, witnessTypeString] = await Promise.all([
+    withRpcFallback(input.chain, async (client) =>
+      client.readContract({
+        address: input.forwarder as `0x${string}`,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getPermit2WitnessStructHash",
+        args: [
+          input.macro as `0x${string}`,
+          input.encodedPayload as `0x${string}`,
+          input.permit2.upgradeSuperToken as `0x${string}`,
+        ],
+      }),
+    ),
+    withRpcFallback(input.chain, async (client) =>
+      client.readContract({
+        address: input.forwarder as `0x${string}`,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getPermit2WitnessTypeString",
+        args: [
+          input.macro as `0x${string}`,
+          input.encodedPayload as `0x${string}`,
+        ],
+      }),
+    ),
+  ]);
   return buildPermit2Context({
     permit2: input.permit2,
     owner: input.owner,
