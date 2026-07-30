@@ -78,7 +78,7 @@ When `SAFE_API_KEY` is set, `clearMacroV1` may use Safe off-chain message signin
 | `PROVIDER_NAME`        | yes        | Must match `payload.security.provider` from dapps (also returned by `GET /v1/capabilities`)     |
 | `API_AUTH_ENABLED`     | no         | Default `false`                                                                                 |
 | `API_CLIENTS_JSON`     | if auth on | JSON array `[{ "id", "apiTokenHash" }]` where `apiTokenHash` is SHA-256 hex of the bearer token |
-| `SAFE_API_KEY`         | no         | Safe Transaction Service API key. When set, enables `safeMessageV1` for `clearMacroV1`.         |
+| `SAFE_API_KEY`         | no         | Safe Transaction Service API key. When set, enables `safeMessageV1` for `clearMacroV1`. Must be listed in `compose.prod.yaml` so the app container receives it. |
 | `SAFE_AUTHORIZATION_ENABLED` | no   | Optional override. Omit to derive from `SAFE_API_KEY`. `false` forces off; `true` requires key. |
 
 ### Provider Config JSON (`config/provider.json`)
