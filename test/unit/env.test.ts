@@ -1,5 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadEnv } from "../../src/config/env.js";
+
+beforeEach(() => {
+  delete process.env.DATABASE_PATH;
+  delete process.env.OZ_RELAYER_URL;
+  delete process.env.OZ_RELAYER_API_KEY;
+  delete process.env.PROVIDER_NAME;
+  delete process.env.PORT;
+  delete process.env.API_AUTH_ENABLED;
+  delete process.env.API_CLIENTS_JSON;
+  delete process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS;
+  delete process.env.SAFE_API_KEY;
+  delete process.env.SAFE_AUTHORIZATION_ENABLED;
+});
 
 afterEach(() => {
   delete process.env.DATABASE_PATH;

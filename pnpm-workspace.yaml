@@ -1,0 +1,8 @@
+# Single-package repo: this file holds pnpm 11+ settings (allowBuilds, etc.).
+packages:
+  - "."
+
+# vitest/tsx depend on esbuild's platform binary postinstall. Approve it explicitly
+# so CI and Docker installs don't skip the script and flake on some platforms.
+allowBuilds:
+  esbuild: true

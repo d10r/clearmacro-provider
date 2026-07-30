@@ -1,6 +1,11 @@
+import { existsSync } from "node:fs";
 import { config as dotenvConfig } from "dotenv";
 
-dotenvConfig();
+// Local/dev: load `.env` when present. Compose already injects env into containers.
+// `quiet` suppresses dotenv tip/marketing spam on every process start.
+if (existsSync(".env")) {
+  dotenvConfig({ path: ".env", quiet: true });
+}
 
 function requireString(name: string): string {
   const value = process.env[name];

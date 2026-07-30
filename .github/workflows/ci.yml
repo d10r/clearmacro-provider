@@ -24,8 +24,6 @@ jobs:
         run: ln -s "$GITHUB_WORKSPACE/protocol-monorepo" "$GITHUB_WORKSPACE/../protocol-monorepo"
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.11.0
 
       - uses: actions/setup-node@v4
         with:

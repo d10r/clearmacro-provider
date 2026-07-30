@@ -61,7 +61,7 @@ When `SAFE_API_KEY` is set, `clearMacroV1` may use Safe off-chain message signin
 ## Requirements
 
 - Node.js 24+
-- pnpm 10+
+- pnpm 11+
 - Docker + Docker Compose (for local stack / prod compose)
 
 ## Configuration
