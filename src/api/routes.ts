@@ -473,10 +473,13 @@ export async function registerRoutes(
         chainId: chain.chainId,
         forwarderAddress: chain.forwarderAddress as `0x${string}`,
         supportedKinds: ["clearMacroV1", "clearMacroPermit2V1"] as const,
-        ...(deps.safeAuthorizationEnabled &&
-        deps.safeClient?.isChainSupported(chain.chainId)
-          ? { supportedAuthorizationMethods: ["safeMessageV1"] as const }
-          : {}),
+        supportedAuthorizationMethods: [
+          "signature",
+          ...(deps.safeAuthorizationEnabled &&
+          deps.safeClient?.isChainSupported(chain.chainId)
+            ? (["safeMessageV1"] as const)
+            : []),
+        ],
         macroPolicy: chain.macroPolicy,
       })),
     }),

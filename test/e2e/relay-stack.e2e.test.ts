@@ -710,7 +710,10 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
       const caps = (await capRes.json()) as {
         chains: Array<{ chainId: number; supportedAuthorizationMethods?: string[] }>;
       };
-      expect(caps.chains[0]?.supportedAuthorizationMethods).toEqual(["safeMessageV1"]);
+      expect(caps.chains[0]?.supportedAuthorizationMethods).toEqual([
+        "signature",
+        "safeMessageV1",
+      ]);
 
       const salt = randomBytes(32);
       const nonce = await publicClient.readContract({

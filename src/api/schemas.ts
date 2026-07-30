@@ -480,11 +480,16 @@ export const CapabilitiesResponseSchema = Type.Object({
           description: "Relay kinds supported by this provider on the chain.",
         },
       ),
-      supportedAuthorizationMethods: Type.Optional(
-        Type.Array(Type.Literal("safeMessageV1"), {
+      supportedAuthorizationMethods: Type.Array(
+        Type.Union([Type.Literal("signature"), Type.Literal("safeMessageV1")], {
           description:
-            "Authorization methods supported for `clearMacroV1` on this chain.",
+            "`signature` is top-level ClearMacro digest auth for `clearMacroV1`. `safeMessageV1` is optional Safe message authorization when enabled for the chain.",
         }),
+        {
+          minItems: 1,
+          description:
+            "Authorization methods supported for `clearMacroV1` on this chain. Always includes `signature`; may also include `safeMessageV1`.",
+        },
       ),
       macroPolicy: Type.Unsafe<typeof CapabilitiesMacroPolicySchema>({
         ...CapabilitiesMacroPolicySchema,

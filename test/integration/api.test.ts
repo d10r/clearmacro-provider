@@ -334,6 +334,7 @@ describe("API integration", () => {
         forwarderAddress: string;
         macroPolicy: { mode: "allowlist"; allowedMacros: Array<{ domain: string; address: string }> };
         supportedKinds: string[];
+        supportedAuthorizationMethods: string[];
       }>;
     }>();
     expect(body.providerName).toBe("macros.superfluid.eth");
@@ -347,6 +348,7 @@ describe("API integration", () => {
       "clearMacroV1",
       "clearMacroPermit2V1",
     ]);
+    expect(body.chains[0]?.supportedAuthorizationMethods).toEqual(["signature"]);
   });
 
   it("enforces auth token when auth is enabled", async () => {

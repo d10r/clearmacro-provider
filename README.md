@@ -54,7 +54,7 @@ When `SAFE_API_KEY` is set, `clearMacroV1` may use Safe off-chain message signin
 
 - Request: exactly one of `signature` **or** `authorization: { type: "safeMessageV1", safeMessageHash }` (mutually exclusive).
 - Response starts in `awaiting_authorization` until a background authorization worker sees ERC-1271 validation of the ClearMacro digest (prepared Safe signature and/or on-chain-approved empty signature), then promotes to `pending` for normal relayer submission.
-- `GET /v1/capabilities` may include per-chain `supportedAuthorizationMethods: ["safeMessageV1"]` when enabled and the chain is supported by the Safe Transaction Service.
+- `GET /v1/capabilities` includes per-chain `supportedAuthorizationMethods` (always `signature`; also `safeMessageV1` when Safe auth is enabled and the chain is supported by the Safe Transaction Service).
 - Not supported with `clearMacroPermit2V1`, and not compatible with `forceExecuteAfterPreflightRevert`.
 - Env: `SAFE_API_KEY` (enables the feature), optional `SAFE_AUTHORIZATION_ENABLED` kill switch, poll/retry knobs, optional `SAFE_TX_SERVICE_URL` — see `.env.example`.
 
