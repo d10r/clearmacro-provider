@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { openDatabase } from "../../src/db/client.js";
-import { runMigrations, runMigrationsUntil } from "../../src/db/migrations.js";
+import {
+  runMigrations,
+  runMigrationsUntil,
+  tableRebuildMigrationVersions,
+} from "../../src/db/migrations.js";
 import { RelayExecutionEventRepository, RelayExecutionRepository } from "../../src/db/repositories.js";
 
 function makeDb() {
@@ -38,6 +43,18 @@ function basePending() {
 }
 
 describe("db migrations and repositories", () => {
+  it("requires an N-1→N upgrade test for every table-rebuild migration", () => {
+    const thisFile = readFileSync(fileURLToPath(import.meta.url), "utf8");
+    const rebuildVersions = tableRebuildMigrationVersions();
+    expect(rebuildVersions.length).toBeGreaterThan(0);
+    for (const version of rebuildVersions) {
+      expect(
+        thisFile.includes(`runMigrationsUntil(db, "${version}")`),
+        `Missing upgrade test for ${version}. Seed parent+child rows after runMigrationsUntil(db, "${version}"), then runMigrations(db).`,
+      ).toBe(true);
+    }
+  });
+
   it("applies migrations and enforces digest dedupe uniqueness", () => {
     const db = makeDb();
     runMigrations(db);

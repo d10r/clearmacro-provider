@@ -334,6 +334,19 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** True for SQLite rebuilds: create `*_new`, copy rows, drop/rename. These need N-1→N upgrade tests. */
+export function isTableRebuildMigration(sql: string): boolean {
+  return (
+    /\bCREATE\s+TABLE\s+\w+_new\b/i.test(sql) && /\bINSERT\s+INTO\s+\w+_new\b/i.test(sql)
+  );
+}
+
+export function tableRebuildMigrationVersions(): string[] {
+  return migrations
+    .filter((migration) => isTableRebuildMigration(migration.sql))
+    .map((migration) => migration.version);
+}
+
 function ensureSchemaMigrationsTable(client: DbClient): void {
   client.db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -378,9 +391,8 @@ function applyPendingMigrations(client: DbClient, stopBefore?: string): void {
 /**
  * Apply all pending migrations.
  *
- * For migrations that rebuild tables referenced by FKs, also add an upgrade test:
- * `runMigrationsUntil(db, "<that version>")`, insert parent+child rows, then `runMigrations(db)`.
- * Empty-DB migrate-to-latest alone will not catch that failure mode.
+ * Table-rebuild migrations (`CREATE …_new` + copy + drop) must have an N-1→N upgrade
+ * test using `runMigrationsUntil`. Enforced by the meta-test in `test/integration/db.test.ts`.
  */
 export function runMigrations(client: DbClient): void {
   applyPendingMigrations(client);
