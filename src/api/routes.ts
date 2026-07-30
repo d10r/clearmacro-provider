@@ -10,6 +10,7 @@ import {
   RelayExecutionResponseSchema,
 } from "./schemas.js";
 import { ApiError, toErrorBody } from "./errors.js";
+import type { RegisterRoutesDeps } from "./deps.js";
 import type { RelayerTransactionRepository } from "../db/repositories.js";
 import type { RelayExecutionRow } from "../db/repositories.js";
 import {
@@ -17,7 +18,7 @@ import {
   finalizeCreatedExecution,
   type CreateRelayExecutionBody,
 } from "./admitRelayExecution.js";
-import type { RegisterRoutesDeps } from "./deps.js";
+import { buildSafeMessageLink } from "../safe/config.js";
 
 export type { RegisterRoutesDeps } from "./deps.js";
 
@@ -26,29 +27,76 @@ function sha256(value: string): string {
 }
 
 function assertKindExclusiveRelayFields(body: Record<string, unknown>): void {
-  if (body.kind === "clearMacroV1" && body.permit2 !== undefined) {
-    throw new ApiError(
-      400,
-      "VALIDATION_ERROR",
-      "clearMacroV1 requests must not include permit2.",
-      "validation",
-      false,
-    );
+  if (body.kind === "clearMacroV1") {
+    const hasSignature = body.signature !== undefined;
+    const hasAuthorization = body.authorization !== undefined;
+    if (hasSignature === hasAuthorization) {
+      throw new ApiError(
+        400,
+        "VALIDATION_ERROR",
+        "clearMacroV1 requests require exactly one of signature or authorization.",
+        "validation",
+        false,
+      );
+    }
+    if (body.permit2 !== undefined) {
+      throw new ApiError(
+        400,
+        "VALIDATION_ERROR",
+        "clearMacroV1 requests must not include permit2.",
+        "validation",
+        false,
+      );
+    }
+    if (hasAuthorization) {
+      const authorization = body.authorization as { type?: string; safeMessageHash?: string } | undefined;
+      if (authorization?.type !== "safeMessageV1" || !authorization.safeMessageHash) {
+        throw new ApiError(
+          400,
+          "VALIDATION_ERROR",
+          "clearMacroV1 authorization must be safeMessageV1 with safeMessageHash.",
+          "validation",
+          false,
+        );
+      }
+      if (body.forceExecuteAfterPreflightRevert === true) {
+        throw new ApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Safe message authorization does not support forceExecuteAfterPreflightRevert.",
+          "validation",
+          false,
+        );
+      }
+    }
+    return;
   }
-  if (body.kind === "clearMacroPermit2V1" && body.signature !== undefined) {
-    throw new ApiError(
-      400,
-      "VALIDATION_ERROR",
-      "clearMacroPermit2V1 requests must not include top-level signature.",
-      "validation",
-      false,
-    );
+  if (body.kind === "clearMacroPermit2V1") {
+    if (body.signature !== undefined) {
+      throw new ApiError(
+        400,
+        "VALIDATION_ERROR",
+        "clearMacroPermit2V1 requests must not include top-level signature.",
+        "validation",
+        false,
+      );
+    }
+    if (body.authorization !== undefined) {
+      throw new ApiError(
+        400,
+        "VALIDATION_ERROR",
+        "clearMacroPermit2V1 requests must not include authorization.",
+        "validation",
+        false,
+      );
+    }
   }
 }
 
 function toRelayExecutionResponse(
   row: RelayExecutionRow,
   relayer: ReturnType<RelayerTransactionRepository["getByExecutionId"]>,
+  deps?: Pick<RegisterRoutesDeps, "safeClient" | "safeAuthorizationEnabled">,
 ) {
   const receipt = row.receiptJson
     ? (JSON.parse(
@@ -69,6 +117,23 @@ function toRelayExecutionResponse(
           hash: row.currentTransactionHash as `0x${string}`,
           to: row.forwarderAddress as `0x${string}`,
           submittedAt: relayer?.submittedAt ?? undefined,
+        }
+      : undefined;
+  const authorization =
+    row.authorizationType === "safeMessageV1" && row.safeMessageHash
+      ? {
+          type: "safeMessageV1" as const,
+          safeMessageHash: row.safeMessageHash as `0x${string}`,
+          ...(deps?.safeAuthorizationEnabled
+            ? {
+                messageLink:
+                  buildSafeMessageLink({
+                    chainId: row.chainId,
+                    safeAddress: row.signerAddress,
+                    safeMessageHash: row.safeMessageHash,
+                  }) ?? undefined,
+              }
+            : {}),
         }
       : undefined;
   return {
@@ -101,6 +166,7 @@ function toRelayExecutionResponse(
         }
       : {}),
     ...(error ? { error } : {}),
+    ...(authorization ? { authorization } : {}),
     timestamps: {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -312,6 +378,7 @@ export async function registerRoutes(
       return toRelayExecutionResponse(
         row,
         deps.relayerTransactions.getByExecutionId(row.id),
+        deps,
       );
     },
   );
@@ -372,7 +439,7 @@ export async function registerRoutes(
       const includeEvents =
         (request.query as { include?: string }).include === "events";
       const relayer = deps.relayerTransactions.getByExecutionId(id);
-      const response = toRelayExecutionResponse(row, relayer);
+      const response = toRelayExecutionResponse(row, relayer, deps);
       if (!includeEvents) {
         return response;
       }
@@ -406,6 +473,10 @@ export async function registerRoutes(
         chainId: chain.chainId,
         forwarderAddress: chain.forwarderAddress as `0x${string}`,
         supportedKinds: ["clearMacroV1", "clearMacroPermit2V1"] as const,
+        ...(deps.safeAuthorizationEnabled &&
+        deps.safeClient?.isChainSupported(chain.chainId)
+          ? { supportedAuthorizationMethods: ["safeMessageV1"] as const }
+          : {}),
         macroPolicy: chain.macroPolicy,
       })),
     }),

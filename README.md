@@ -48,6 +48,16 @@ sequenceDiagram
 
 Execution states, deduplication, status codes, errors, and request fields (including `forceExecuteAfterPreflightRevert`) are covered in the [API reference](https://clearmacro-provider.superfluid.dev/docs). For a state machine and dedup invariants, see [`docs/architecture.md`](docs/architecture.md).
 
+### Safe message authorization (optional)
+
+When `SAFE_API_KEY` is set, `clearMacroV1` may use Safe off-chain message signing instead of a top-level EIP-1271/`signature` field. Set `SAFE_AUTHORIZATION_ENABLED=false` to force the feature off while keeping the key configured.
+
+- Request: exactly one of `signature` **or** `authorization: { type: "safeMessageV1", safeMessageHash }` (mutually exclusive).
+- Response starts in `awaiting_authorization` until a background authorization worker sees ERC-1271 validation of the ClearMacro digest (prepared Safe signature and/or on-chain-approved empty signature), then promotes to `pending` for normal relayer submission.
+- `GET /v1/capabilities` may include per-chain `supportedAuthorizationMethods: ["safeMessageV1"]` when enabled and the chain is supported by the Safe Transaction Service.
+- Not supported with `clearMacroPermit2V1`, and not compatible with `forceExecuteAfterPreflightRevert`.
+- Env: `SAFE_API_KEY` (enables the feature), optional `SAFE_AUTHORIZATION_ENABLED` kill switch, poll/retry knobs, optional `SAFE_TX_SERVICE_URL` — see `.env.example`.
+
 ## Requirements
 
 - Node.js 24+
@@ -68,6 +78,8 @@ Execution states, deduplication, status codes, errors, and request fields (inclu
 | `PROVIDER_NAME`        | yes        | Must match `payload.security.provider` from dapps (also returned by `GET /v1/capabilities`)     |
 | `API_AUTH_ENABLED`     | no         | Default `false`                                                                                 |
 | `API_CLIENTS_JSON`     | if auth on | JSON array `[{ "id", "apiTokenHash" }]` where `apiTokenHash` is SHA-256 hex of the bearer token |
+| `SAFE_API_KEY`         | no         | Safe Transaction Service API key. When set, enables `safeMessageV1` for `clearMacroV1`.         |
+| `SAFE_AUTHORIZATION_ENABLED` | no   | Optional override. Omit to derive from `SAFE_API_KEY`. `false` forces off; `true` requires key. |
 
 ### Provider Config JSON (`config/provider.json`)
 

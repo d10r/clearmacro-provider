@@ -52,4 +52,7 @@ export type RegisterRoutesDeps = {
   ) => Promise<string>;
   getPermit2DomainSeparator?: (chain: RegistryChain) => Promise<string>;
   preflightRunPermit2AndMacro?: typeof preflightRunPermit2AndMacro;
+  safeAuthorizationEnabled?: boolean;
+  safeClient?: import("../safe/client.js").SafeClient;
+  getSignerBytecode?: (input: { chainId: number; address: string }) => Promise<string | null>;
 };

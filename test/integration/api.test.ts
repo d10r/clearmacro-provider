@@ -673,4 +673,275 @@ describe("API integration", () => {
     });
     expect(badSignature.statusCode).toBe(400);
   });
+
+  it("accepts safeMessageV1 authorization and returns awaiting_authorization", async () => {
+    const safeClient = {
+      isChainSupported: () => true,
+      assertEoaOwners: async () => {},
+      getMessage: async () => ({
+        safe: "0x00000000000000000000000000000000000000bb",
+        messageHash: `0x${"aa".repeat(32)}`,
+        preparedSignature: null,
+        messageDigest: `0x${"11".repeat(32)}`,
+      }),
+    };
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient,
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const payload = {
+      ...withoutSignature,
+      authorization: {
+        type: "safeMessageV1" as const,
+        safeMessageHash: `0x${"aa".repeat(32)}`,
+      },
+    };
+    const created = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(created.statusCode).toBe(202);
+    const body = created.json<{
+      state: string;
+      authorization?: { type: string; safeMessageHash: string; messageLink?: string };
+    }>();
+    expect(body.state).toBe("awaiting_authorization");
+    expect(body.authorization?.type).toBe("safeMessageV1");
+    expect(body.authorization?.messageLink).toContain("app.safe.global");
+  });
+
+  it("rejects clearMacroV1 requests with both signature and authorization", async () => {
+    const { app } = await createTestHarness({ safeAuthorizationEnabled: true });
+    const payload = {
+      ...(await buildRelayPayload()),
+      authorization: {
+        type: "safeMessageV1" as const,
+        safeMessageHash: `0x${"aa".repeat(32)}`,
+      },
+    };
+    const response = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("replays identical safeMessageV1 authorization with 200 for same anonymous caller", async () => {
+    const safeClient = {
+      isChainSupported: () => true,
+      assertEoaOwners: async () => {},
+      getMessage: async () => ({
+        safe: "0x00000000000000000000000000000000000000bb",
+        messageHash: `0x${"aa".repeat(32)}`,
+        preparedSignature: null,
+        messageDigest: `0x${"11".repeat(32)}`,
+      }),
+    };
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient,
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const payload = {
+      ...withoutSignature,
+      authorization: {
+        type: "safeMessageV1" as const,
+        safeMessageHash: `0x${"aa".repeat(32)}`,
+      },
+    };
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    const second = await app.inject({ method: "POST", url: "/v1/relay-executions", payload });
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(200);
+    expect(first.json<{ id: string }>().id).toBe(second.json<{ id: string }>().id);
+  });
+
+  it("returns 409 DUPLICATE_EXECUTION for safeMessageV1 across authenticated clients", async () => {
+    const tokA = "token-safe-a";
+    const tokB = "token-safe-b";
+    const app = (
+      await createTestHarness({
+        safeAuthorizationEnabled: true,
+        safeClient: {
+          isChainSupported: () => true,
+          assertEoaOwners: async () => {},
+          getMessage: async () => ({
+            safe: "0x00000000000000000000000000000000000000bb",
+            messageHash: `0x${"aa".repeat(32)}`,
+            preparedSignature: null,
+            messageDigest: `0x${"11".repeat(32)}`,
+          }),
+        },
+        getSignerBytecode: async () => "0x1234",
+        env: {
+          apiAuthEnabled: true,
+          apiClients: [
+            { id: "client-a", apiTokenHash: createHash("sha256").update(tokA).digest("hex").toLowerCase() },
+            { id: "client-b", apiTokenHash: createHash("sha256").update(tokB).digest("hex").toLowerCase() },
+          ],
+        },
+      })
+    ).app;
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const payload = {
+      ...withoutSignature,
+      authorization: {
+        type: "safeMessageV1" as const,
+        safeMessageHash: `0x${"aa".repeat(32)}`,
+      },
+    };
+    const first = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokA) });
+    expect(first.statusCode).toBe(202);
+    const dup = await app.inject({ method: "POST", url: "/v1/relay-executions", payload, headers: bearer(tokB) });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json<{ error: { code: string; executionId: string | null } }>().error.executionId).toBeNull();
+  });
+
+  it("rejects safeMessageV1 when Safe authorization is disabled", async () => {
+    const { app } = await createTestHarness({ safeAuthorizationEnabled: false });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        authorization: { type: "safeMessageV1" as const, safeMessageHash: `0x${"aa".repeat(32)}` },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: { message: string } }>().error.message).toContain(
+      "not enabled",
+    );
+  });
+
+  it("rejects safeMessageV1 on unsupported chains", async () => {
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient: {
+        isChainSupported: () => false,
+        assertEoaOwners: async () => {},
+        getMessage: async () => {
+          throw new Error("not reached");
+        },
+      },
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        authorization: { type: "safeMessageV1" as const, safeMessageHash: `0x${"aa".repeat(32)}` },
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("CHAIN_NOT_ALLOWED");
+  });
+
+  it("rejects safeMessageV1 for EOA signers", async () => {
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient: {
+        isChainSupported: () => true,
+        assertEoaOwners: async () => {},
+        getMessage: async () => {
+          throw new Error("not reached");
+        },
+      },
+      getSignerBytecode: async () => "0x",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        authorization: { type: "safeMessageV1" as const, safeMessageHash: `0x${"aa".repeat(32)}` },
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { message: string } }>().error.message).toContain(
+      "contract signer",
+    );
+  });
+
+  it("rejects safeMessageV1 when nested Safe owners are detected at admission", async () => {
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient: {
+        isChainSupported: () => true,
+        assertEoaOwners: async () => {
+          throw new Error("Nested or contract Safe owners are not supported in safeMessageV1.");
+        },
+        getMessage: async () => {
+          throw new Error("not reached");
+        },
+      },
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        authorization: { type: "safeMessageV1" as const, safeMessageHash: `0x${"aa".repeat(32)}` },
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json<{ error: { message: string } }>().error.message).toContain(
+      "Nested or contract Safe owners",
+    );
+  });
+
+  it("rejects safeMessageV1 with forceExecuteAfterPreflightRevert", async () => {
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient: {
+        isChainSupported: () => true,
+        assertEoaOwners: async () => {},
+        getMessage: async () => {
+          throw new Error("not reached");
+        },
+      },
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+      forceExecuteAfterPreflightRevert: true,
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        forceExecuteAfterPreflightRevert: true,
+        authorization: { type: "safeMessageV1" as const, safeMessageHash: `0x${"aa".repeat(32)}` },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    const body = response.json<{ error: { code: string; message: string } }>();
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toContain("forceExecuteAfterPreflightRevert");
+  });
 });

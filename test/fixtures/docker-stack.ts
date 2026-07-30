@@ -319,7 +319,7 @@ export async function setERC1820RegistryCode(input: { repoRoot: string; rpcUrl: 
     "ERC1820RegistryCompiled.sol",
   );
   const source = readFileSync(sourcePath, "utf8");
-  const match = source.match(/bytes internal constant bin = bytes\(hex"([0-9a-fA-F]+)"\)/);
+  const match = source.match(/bytes internal constant BYTECODE = bytes\(hex"([0-9a-fA-F]+)"\)/);
   if (!match?.[1]) {
     throw new Error(`Could not extract ERC1820 bytecode from ${sourcePath}`);
   }
@@ -742,4 +742,88 @@ export function chmodStackTree(stackDir: string): void {
     }
   };
   walk(stackDir);
+}
+
+const mockErc1271SafeAbi = [
+  {
+    type: "function",
+    name: "authorize",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "digest", type: "bytes32" }],
+    outputs: [],
+  },
+] as const;
+
+export async function deployMockErc1271Safe(input: { repoRoot: string; rpcUrl: string }): Promise<Address> {
+  const forgeDir = join(input.repoRoot, "test", "fixtures", "contracts");
+  const artifact = readFoundryArtifact(forgeDir, "MockErc1271Safe.sol/MockErc1271Safe.json");
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const deployer = privateKeyToAccount(ANVIL_DEFAULT_DEPLOYER_PK);
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  const walletClient = createWalletClient({ chain, transport: http(input.rpcUrl), account: deployer });
+  const hash = await walletClient.deployContract({
+    abi: artifact.abi as never,
+    bytecode: artifact.bytecode.object,
+    gas: 2_000_000n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  if (receipt.status !== "success" || !receipt.contractAddress) {
+    throw new Error(`MockErc1271Safe deployment failed: ${hash}`);
+  }
+  return receipt.contractAddress;
+}
+
+export async function authorizeMockErc1271Safe(input: {
+  rpcUrl: string;
+  safeAddress: Address;
+  digest: Hex;
+}): Promise<void> {
+  const chain = {
+    id: 31337,
+    name: "anvil",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [input.rpcUrl] } },
+  } as const;
+  const deployer = privateKeyToAccount(ANVIL_DEFAULT_DEPLOYER_PK);
+  const walletClient = createWalletClient({ chain, transport: http(input.rpcUrl), account: deployer });
+  const hash = await walletClient.writeContract({
+    address: input.safeAddress,
+    abi: mockErc1271SafeAbi,
+    functionName: "authorize",
+    args: [input.digest],
+  });
+  const publicClient = createPublicClient({ chain, transport: http(input.rpcUrl) });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  if (receipt.status !== "success") {
+    throw new Error(`authorize() failed on MockErc1271Safe: ${hash}`);
+  }
+}
+
+export async function configureSafeTxStub(
+  stubBase: string,
+  input: { safe: Address; owners: Address[] },
+): Promise<void> {
+  const res = await fetch(`${stubBase.replace(/\/$/, "")}/test/configure-safe`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      safe: input.safe,
+      owners: input.owners,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`configure-safe failed (${res.status}): ${await res.text()}`);
+  }
+}
+
+export async function resetSafeTxStub(stubBase: string): Promise<void> {
+  const res = await fetch(`${stubBase.replace(/\/$/, "")}/test/reset`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`reset safe-tx-stub failed (${res.status}): ${await res.text()}`);
+  }
 }

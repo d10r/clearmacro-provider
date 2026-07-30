@@ -145,4 +145,127 @@ describe("db migrations and repositories", () => {
     );
     expect(found?.id).toBe(created.id);
   });
+
+  it("persists awaiting_authorization rows with null signature and safe metadata", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const created = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest: "0x" + "66".repeat(32),
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "77".repeat(32),
+    });
+    const loaded = executions.getByIdOrThrow(created.id);
+    expect(loaded.state).toBe("awaiting_authorization");
+    expect(loaded.signature).toBeNull();
+    expect(loaded.authorizationType).toBe("safeMessageV1");
+    expect(loaded.safeMessageHash).toBe("0x" + "77".repeat(32));
+  });
+
+  it("orders due authorization polls by authorization_poll_at", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const later = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest: "0x" + "88".repeat(32),
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "99".repeat(32),
+    });
+    const sooner = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest: "0x" + "aa".repeat(32),
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "bb".repeat(32),
+    });
+    executions.scheduleAuthorizationPoll(later.id, {
+      pollAt: new Date(Date.now() + 60_000).toISOString(),
+      pollAttempts: 1,
+    });
+    executions.scheduleAuthorizationPoll(sooner.id, {
+      pollAt: new Date(Date.now() - 1_000).toISOString(),
+      pollAttempts: 1,
+    });
+
+    const due = executions.listAwaitingAuthorizationDue(10);
+    expect(due[0]?.id).toBe(sooner.id);
+    expect(due.some((row) => row.id === later.id)).toBe(false);
+  });
+
+  it("atomically promotes awaiting_authorization to pending with signature", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const created = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest: "0x" + "cc".repeat(32),
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "dd".repeat(32),
+    });
+    const promoted = executions.promoteToPending(created.id, {
+      signature: "0xbeef",
+      signatureSource: "safe_prepared_signature",
+      forceAfterPreflightRevert: 0,
+    });
+    expect(promoted.state).toBe("pending");
+    expect(promoted.signature).toBe("0xbeef");
+    expect(promoted.signatureSource).toBe("safe_prepared_signature");
+    expect(promoted.authorizationPollAt).toBeNull();
+  });
+
+  it("dedup replay returns the same awaiting_authorization execution", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const digest = "0x" + "ee".repeat(32);
+    const created = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest,
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "ff".repeat(32),
+    });
+    const found = executions.findByDedupKey(
+      1,
+      "0x0000000000000000000000000000000000000001",
+      "0x0000000000000000000000000000000000000003",
+      digest,
+    );
+    expect(found?.id).toBe(created.id);
+    expect(found?.state).toBe("awaiting_authorization");
+  });
+
+  it("survives provider restart with awaiting_authorization rows still due for poll", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const created = executions.createAwaitingAuthorization({
+      ...basePending(),
+      digest: "0x" + "ff".repeat(32),
+      authorizationType: "safeMessageV1",
+      safeMessageHash: "0x" + "00".repeat(32),
+    });
+    executions.scheduleAuthorizationPoll(created.id, {
+      pollAt: new Date(Date.now() - 1_000).toISOString(),
+      pollAttempts: 2,
+    });
+
+    const restarted = new RelayExecutionRepository(db);
+    const due = restarted.listAwaitingAuthorizationDue(10);
+    expect(due.some((row) => row.id === created.id)).toBe(true);
+    expect(restarted.getByIdOrThrow(created.id).authorizationPollAttempts).toBe(2);
+  });
+
+  it("applies migration 003 authorization columns", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const columns = db.db
+      .prepare("PRAGMA table_info(relay_executions)")
+      .all() as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    expect(names.has("authorization_type")).toBe(true);
+    expect(names.has("safe_message_hash")).toBe(true);
+    expect(names.has("authorization_poll_at")).toBe(true);
+    expect(names.has("signature_source")).toBe(true);
+  });
 });

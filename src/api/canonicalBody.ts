@@ -46,7 +46,11 @@ export type ClearMacroV1CreateBodyInput = {
   macroAddress: string;
   signerAddress: string;
   payload: string;
-  signature: string;
+  signature?: string;
+  authorization?: {
+    type: "safeMessageV1";
+    safeMessageHash: string;
+  };
   value?: string;
   forceExecuteAfterPreflightRevert?: boolean;
   clientRequestId?: string | null;
@@ -76,7 +80,8 @@ export function canonicalCreateBodyJson(body: CanonicalCreateBodyInput): string 
       ? {
           kind: body.kind,
           ...sharedFields(body),
-          signature: body.signature,
+          ...(body.signature !== undefined ? { signature: body.signature } : {}),
+          ...(body.authorization !== undefined ? { authorization: body.authorization } : {}),
         }
       : {
           kind: body.kind,

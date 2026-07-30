@@ -241,6 +241,93 @@ const migrations: Migration[] = [
       PRAGMA foreign_keys = ON;
     `,
   },
+  {
+    version: "003_safe_message_authorization",
+    sql: `
+      PRAGMA foreign_keys = OFF;
+
+      CREATE TABLE relay_executions_new (
+        id text PRIMARY KEY,
+        client_id text NOT NULL,
+        client_request_id text NULL,
+        request_body_hash text NOT NULL,
+        digest text NOT NULL,
+        domain text NOT NULL,
+        kind text NOT NULL,
+        state text NOT NULL,
+        terminal integer NOT NULL DEFAULT 0,
+        chain_id integer NOT NULL,
+        oz_relayer_id text NOT NULL,
+        oz_transaction_id text NULL,
+        forwarder_address text NOT NULL,
+        macro_address text NOT NULL,
+        signer_address text NOT NULL,
+        nonce text NOT NULL,
+        valid_after text NOT NULL,
+        valid_before text NOT NULL,
+        value text NOT NULL DEFAULT '0',
+        payload text NOT NULL,
+        signature text NULL,
+        permit2_json text NULL,
+        metadata_json text NOT NULL DEFAULT '{}',
+        force_after_preflight_revert integer NOT NULL DEFAULT 0,
+        authorization_type text NULL,
+        safe_message_hash text NULL,
+        authorization_poll_at text NULL,
+        authorization_poll_attempts integer NOT NULL DEFAULT 0,
+        authorization_last_error_json text NULL,
+        signature_source text NULL,
+        current_transaction_hash text NULL,
+        transaction_hashes_json text NOT NULL DEFAULT '[]',
+        receipt_json text NULL,
+        required_confirmations integer NULL,
+        last_error_json text NULL,
+        created_at text NOT NULL,
+        updated_at text NOT NULL,
+        terminal_at text NULL
+      );
+
+      INSERT INTO relay_executions_new (
+        id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
+        chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address,
+        nonce, valid_after, valid_before, value, payload, signature, permit2_json, metadata_json,
+        force_after_preflight_revert, authorization_type, safe_message_hash, authorization_poll_at,
+        authorization_poll_attempts, authorization_last_error_json, signature_source,
+        current_transaction_hash, transaction_hashes_json, receipt_json, required_confirmations,
+        last_error_json, created_at, updated_at, terminal_at
+      )
+      SELECT
+        id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
+        chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address,
+        nonce, valid_after, valid_before, value, payload, signature, permit2_json, metadata_json,
+        force_after_preflight_revert, NULL, NULL, NULL, 0, NULL, NULL,
+        current_transaction_hash, transaction_hashes_json, receipt_json, required_confirmations,
+        last_error_json, created_at, updated_at, terminal_at
+      FROM relay_executions;
+
+      DROP TABLE relay_executions;
+      ALTER TABLE relay_executions_new RENAME TO relay_executions;
+
+      CREATE UNIQUE INDEX relay_executions_dedup_uniq
+        ON relay_executions(chain_id, forwarder_address, signer_address, digest);
+      CREATE INDEX relay_executions_state_chain_created_idx
+        ON relay_executions(state, chain_id, created_at);
+      CREATE INDEX relay_executions_chain_tx_hash_idx
+        ON relay_executions(chain_id, current_transaction_hash)
+        WHERE current_transaction_hash IS NOT NULL;
+      CREATE INDEX relay_executions_oz_ids_idx
+        ON relay_executions(oz_relayer_id, oz_transaction_id)
+        WHERE oz_transaction_id IS NOT NULL;
+      CREATE INDEX relay_executions_client_request_id_idx
+        ON relay_executions(client_id, client_request_id)
+        WHERE client_request_id IS NOT NULL;
+      CREATE INDEX relay_executions_awaiting_auth_poll_idx
+        ON relay_executions(authorization_poll_at, created_at)
+        WHERE terminal = 0 AND state = 'awaiting_authorization';
+
+      PRAGMA foreign_keys = ON;
+    `,
+  },
 ];
 
 function nowIso(): string {

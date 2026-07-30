@@ -1,10 +1,21 @@
-export const relayExecutionStates = ["pending", "submitted", "succeeded", "reverted", "rejected", "failed", "expired", "canceled"] as const;
+export const relayExecutionStates = [
+  "awaiting_authorization",
+  "pending",
+  "submitted",
+  "succeeded",
+  "reverted",
+  "rejected",
+  "failed",
+  "expired",
+  "canceled",
+] as const;
 
 export type RelayExecutionState = (typeof relayExecutionStates)[number];
 
 const terminalStates = new Set<RelayExecutionState>(["succeeded", "reverted", "rejected", "failed", "expired", "canceled"]);
 
 const allowedTransitions: Readonly<Record<RelayExecutionState, ReadonlySet<RelayExecutionState>>> = {
+  awaiting_authorization: new Set(["pending", "rejected", "failed", "expired", "canceled"]),
   pending: new Set(["submitted", "rejected", "failed", "expired", "canceled"]),
   submitted: new Set(["submitted", "succeeded", "reverted", "failed", "expired", "canceled"]),
   succeeded: new Set(),

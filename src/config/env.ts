@@ -24,6 +24,38 @@ function parseBoolean(name: string, fallback: boolean): boolean {
   throw new Error(`Invalid boolean env var ${name}: ${value}`);
 }
 
+/** `undefined` when unset or blank; otherwise strict true/false. */
+function parseOptionalBoolean(name: string): boolean | undefined {
+  const value = process.env[name];
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(`Invalid boolean env var ${name}: ${value}`);
+}
+
+/**
+ * Safe message authorization is on when `SAFE_API_KEY` is set.
+ * `SAFE_AUTHORIZATION_ENABLED=false` forces off (kill switch) even with a key.
+ * `SAFE_AUTHORIZATION_ENABLED=true` without a key is a configuration error.
+ */
+function resolveSafeAuthorizationEnabled(safeApiKey: string | null): boolean {
+  const flag = parseOptionalBoolean("SAFE_AUTHORIZATION_ENABLED");
+  const hasKey = Boolean(safeApiKey);
+  if (flag === true && !hasKey) {
+    throw new Error("SAFE_AUTHORIZATION_ENABLED=true requires SAFE_API_KEY");
+  }
+  if (flag === false) {
+    return false;
+  }
+  return hasKey;
+}
+
 function parseInteger(name: string, fallback: number, min = 0): number {
   const value = process.env[name];
   if (value === undefined) {
@@ -75,6 +107,8 @@ export function loadEnv() {
   if (apiAuthEnabled && apiClients.length === 0) {
     throw new Error("API_AUTH_ENABLED requires non-empty API_CLIENTS_JSON");
   }
+  const safeApiKey = process.env.SAFE_API_KEY?.trim() || null;
+  const safeAuthorizationEnabled = resolveSafeAuthorizationEnabled(safeApiKey);
   const providerConfigPath = process.env.PROVIDER_CONFIG_PATH ?? "config/provider.json";
   return {
     databasePath: process.env.DATABASE_PATH ?? "./data/clearmacro-provider-dev.sqlite",
@@ -108,6 +142,14 @@ export function loadEnv() {
     readinessOzRetryBaseDelayMs: parseInteger("READINESS_OZ_RETRY_BASE_DELAY_MS", 100, 1),
     /** Background relayer signer balance sampler interval (0 disables). Default 60 minutes. */
     relayerSignerBalanceSampleIntervalMs: parseRelayerSignerBalanceSampleIntervalMs(),
+    safeAuthorizationEnabled,
+    safeApiKey,
+    safeApiRetryMaxAttempts: parseInteger("SAFE_API_RETRY_MAX_ATTEMPTS", 3, 1),
+    safeApiRetryBaseDelayMs: parseInteger("SAFE_API_RETRY_BASE_DELAY_MS", 250, 1),
+    safeAuthorizationPollBaseDelayMs: parseInteger("SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS", 5000, 1),
+    safeAuthorizationPollMaxDelayMs: parseInteger("SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS", 60000, 1),
+    /** Optional override for Safe Transaction Service base URL (e.g. stack E2E stub). */
+    safeTxServiceUrl: process.env.SAFE_TX_SERVICE_URL?.trim() || null,
   };
 }
 

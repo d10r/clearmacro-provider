@@ -63,6 +63,13 @@ export function createMetrics() {
     registers: [registry],
   });
 
+  const safeAuthorizationPollCounter = new Counter({
+    name: "clearmacro_safe_authorization_poll_total",
+    help: "Safe authorization poll outcomes",
+    labelNames: ["chain_id", "outcome"] as const,
+    registers: [registry],
+  });
+
   return {
     registry,
     requestCounter,
@@ -73,5 +80,6 @@ export function createMetrics() {
     relayerSignerBalanceNative,
     relayerSignerBalanceProbeSuccess,
     relayerSignerBalanceLastUpdateTimestampSeconds,
+    safeAuthorizationPollCounter,
   };
 }

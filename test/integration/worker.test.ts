@@ -866,4 +866,45 @@ describe("relayer worker", () => {
     expect(executions.getByIdOrThrow(created.id).state).toBe("failed");
     expect(executionEvents.listByExecution(created.id).some((e) => e.type === "relayer_submit_retry_scheduled")).toBe(true);
   });
+
+  it("fails clearMacroV1 pending rows that are missing a signature", async () => {
+    const { executions, executionEvents, relayerTransactions, registry } = setup();
+    const created = executions.createPending(createExecutionInput({ signature: null }));
+    let submitted = false;
+
+    await processRelayerWorkerTick({
+      executions,
+      executionEvents,
+      relayerTransactions,
+      relayerClient: {
+        getRelayer: async () => ({
+          address: "0x0000000000000000000000000000000000000010",
+          paused: false,
+          system_disabled: false,
+        }),
+        submitTransaction: async () => {
+          submitted = true;
+          throw new Error("should not submit");
+        },
+        getTransaction: async () => {
+          throw new Error("not used");
+        },
+      } as never,
+      registry,
+      batchSize: 10,
+      preflightSimulation: async () => "ok",
+    });
+
+    const updated = executions.getByIdOrThrow(created.id);
+    expect(updated.state).toBe("failed");
+    expect(submitted).toBe(false);
+    expect(JSON.parse(updated.lastErrorJson ?? "{}")).toMatchObject({
+      code: "INTERNAL_INVARIANT",
+      category: "provider",
+      retryable: false,
+    });
+    expect(
+      executionEvents.listByExecution(created.id).some((e) => e.type === "terminal_error_set"),
+    ).toBe(true);
+  });
 });

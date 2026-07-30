@@ -70,6 +70,16 @@ services:
     volumes:
       - ${E2E_STACK_CONFIG_DIR:?E2E_STACK_CONFIG_DIR required}:/app/config:ro
 
+  # Safe message authorization stack E2E (optional — see relay-stack safeMessageV1 test).
+  safe-tx-stub:
+    image: node:24-bookworm-slim
+    working_dir: /stub
+    command: ["node", "server.mjs"]
+    volumes:
+      - ./test/fixtures/safe-tx-stub:/stub:ro
+    ports:
+      - "${E2E_SAFE_TX_STUB_HOST_PORT:-18080}:8080"
+
   app:
     build:
       context: .
@@ -95,6 +105,12 @@ services:
       RELAYER_WORKER_BATCH_SIZE: "5"
       API_AUTH_ENABLED: "false"
       LOG_LEVEL: info
+      # Safe auth enables when SAFE_API_KEY is set; optional SAFE_AUTHORIZATION_ENABLED=false kill switch.
+      SAFE_API_KEY: ${SAFE_API_KEY:-}
+      SAFE_AUTHORIZATION_ENABLED: ${SAFE_AUTHORIZATION_ENABLED:-}
+      SAFE_TX_SERVICE_URL: ${SAFE_TX_SERVICE_URL:-}
+      SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS: ${SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS:-5000}
+      SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS: ${SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS:-60000}
     ports:
       - "${E2E_APP_HOST_PORT:?E2E_APP_HOST_PORT required}:3000"
     volumes:

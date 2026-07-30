@@ -38,6 +38,9 @@ export type AppDeps = {
   getPermit2WitnessTypeString?: RegisterRoutesDeps["getPermit2WitnessTypeString"];
   getPermit2DomainSeparator?: RegisterRoutesDeps["getPermit2DomainSeparator"];
   preflightRunPermit2AndMacro?: RegisterRoutesDeps["preflightRunPermit2AndMacro"];
+  safeAuthorizationEnabled?: RegisterRoutesDeps["safeAuthorizationEnabled"];
+  safeClient?: RegisterRoutesDeps["safeClient"];
+  getSignerBytecode?: RegisterRoutesDeps["getSignerBytecode"];
   metrics?: AppMetrics;
 };
 
@@ -153,6 +156,13 @@ export async function createApp(deps: AppDeps) {
       : {}),
     ...(deps.preflightRunPermit2AndMacro !== undefined
       ? { preflightRunPermit2AndMacro: deps.preflightRunPermit2AndMacro }
+      : {}),
+    ...(deps.safeAuthorizationEnabled !== undefined
+      ? { safeAuthorizationEnabled: deps.safeAuthorizationEnabled }
+      : {}),
+    ...(deps.safeClient !== undefined ? { safeClient: deps.safeClient } : {}),
+    ...(deps.getSignerBytecode !== undefined
+      ? { getSignerBytecode: deps.getSignerBytecode }
       : {}),
   });
 

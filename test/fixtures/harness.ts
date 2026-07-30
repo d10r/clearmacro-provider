@@ -33,6 +33,9 @@ export type HarnessOverrides = {
   getPermit2WitnessTypeString?: AppDeps["getPermit2WitnessTypeString"];
   getPermit2DomainSeparator?: AppDeps["getPermit2DomainSeparator"];
   preflightRunPermit2AndMacro?: AppDeps["preflightRunPermit2AndMacro"];
+  safeAuthorizationEnabled?: boolean;
+  safeClient?: AppDeps["safeClient"];
+  getSignerBytecode?: AppDeps["getSignerBytecode"];
   macroPolicyMode?: "allowlist" | "open";
 };
 
@@ -146,6 +149,13 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
       (async () => `0x${"33".repeat(32)}`),
     preflightRunPermit2AndMacro:
       overrides?.preflightRunPermit2AndMacro ?? defaultPermit2PreflightOk,
+    ...(overrides?.safeAuthorizationEnabled !== undefined
+      ? { safeAuthorizationEnabled: overrides.safeAuthorizationEnabled }
+      : {}),
+    ...(overrides?.safeClient !== undefined ? { safeClient: overrides.safeClient } : {}),
+    ...(overrides?.getSignerBytecode !== undefined
+      ? { getSignerBytecode: overrides.getSignerBytecode }
+      : {}),
   });
   return {
     dir,

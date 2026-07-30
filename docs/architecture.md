@@ -23,6 +23,7 @@ The public API exposes stable provider execution resources. It intentionally doe
 
 Dapps should track the provider execution `id`. The EVM transaction hash is optional metadata:
 
+- `awaiting_authorization`: Safe message authorization pending (optional `safeMessageV1` path); no signature yet.
 - `pending`: execution accepted, no current transaction hash is required.
 - `submitted`: a current transaction hash is known.
 - `succeeded`, `reverted`, `rejected`, `failed`, `expired`, and `canceled`: terminal states.
@@ -35,7 +36,13 @@ Allowed transitions match `src/tx/lifecycle.ts`. Terminal states do not transiti
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending
+    [*] --> awaiting_authorization : safeMessageV1
+    [*] --> pending : signature / Permit2
+    awaiting_authorization --> pending
+    awaiting_authorization --> rejected
+    awaiting_authorization --> failed
+    awaiting_authorization --> expired
+    awaiting_authorization --> canceled
     pending --> submitted
     pending --> rejected
     pending --> failed
@@ -63,9 +70,9 @@ stateDiagram-v2
 2. Resolve the forwarder from provider config.
 3. Decode ClearMacro payload.
 4. Enforce provider name, macro address consistency, validity window, macro policy, and readiness.
-5. Read the forwarder digest and validate the signature.
-6. Run preflight simulation.
-7. Persist a `pending` execution only after validation passes, or after deterministic preflight revert only when `forceExecuteAfterPreflightRevert` is explicitly true.
+5. For signature/`clearMacroPermit2V1` paths: read the forwarder digest and validate the signature, then run preflight simulation.
+6. For `authorization.type = "safeMessageV1"` (when enabled): verify contract signer + EOA owners, skip admission-time signature/preflight, and persist `awaiting_authorization`. Mutually exclusive with top-level `signature`; incompatible with Permit2 and `forceExecuteAfterPreflightRevert`.
+7. Persist a `pending` execution only after validation passes, or after deterministic preflight revert only when `forceExecuteAfterPreflightRevert` is explicitly true (signature/Permit2 paths only).
 
 Synchronous validation failures do not create public execution resources. They should still write internal audit rows when enough context is available.
 
@@ -99,5 +106,7 @@ The worker owns post-creation progress:
 - Submit the transaction intent to OpenZeppelin Relayer.
 - Store the OpenZeppelin transaction ID internally.
 - Poll OpenZeppelin Relayer and project status into the public execution state.
+
+When Safe authorization is enabled (`SAFE_API_KEY` set, unless forced off with `SAFE_AUTHORIZATION_ENABLED=false`), a separate authorization worker polls `awaiting_authorization` rows, validates observed Safe messages, and promotes them to `pending` (with signature) for the relayer worker.
 
 Transient submit or poll failures should not corrupt public state. Terminal public states should not be silently rewritten; contradictory later evidence belongs in audit/ops handling.

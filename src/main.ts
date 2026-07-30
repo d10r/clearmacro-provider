@@ -11,11 +11,21 @@ import {
 } from "./db/repositories.js";
 import { OzRelayerClient } from "./relayer/client.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
+import { processAuthorizationWorkerTick } from "./relayer/authorizationWorker.js";
 import { createApp } from "./app.js";
 import { createReadyzReadinessCache } from "./chain/readinessCache.js";
 import { startRelayerSignerBalanceSampler } from "./chain/relayerBalanceSampler.js";
-import { evaluateChainReadiness, getForwarderDigest, getPermit2DomainSeparator, getPermit2WitnessStructHash, getPermit2WitnessTypeString, validateRelaySignature } from "./chain/readiness.js";
+import {
+  evaluateChainReadiness,
+  getForwarderDigest,
+  getPermit2DomainSeparator,
+  getPermit2WitnessStructHash,
+  getPermit2WitnessTypeString,
+  validateRelaySignature,
+  withRpcFallback,
+} from "./chain/readiness.js";
 import { createMetrics } from "./metrics/metrics.js";
+import { createSafeClient } from "./safe/client.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -39,6 +49,16 @@ async function main(): Promise<void> {
     maxAttempts: env.readinessOzRetryMaxAttempts,
     baseDelayMs: env.readinessOzRetryBaseDelayMs,
   };
+  const safeClient =
+    env.safeAuthorizationEnabled && env.safeApiKey
+      ? createSafeClient({
+          apiKey: env.safeApiKey,
+          registry,
+          retryMaxAttempts: env.safeApiRetryMaxAttempts,
+          retryBaseDelayMs: env.safeApiRetryBaseDelayMs,
+          txServiceUrl: env.safeTxServiceUrl,
+        })
+      : undefined;
 
   const readinessBase = { registry, relayerClient, ozRetry };
   const evaluateChainReadinessUncached = (chainId: number) => evaluateChainReadiness({ ...readinessBase, chainId });
@@ -99,6 +119,18 @@ async function main(): Promise<void> {
         encodedPayload: input.encodedPayload,
       }),
     getPermit2DomainSeparator: (chain) => getPermit2DomainSeparator(chain),
+    safeAuthorizationEnabled: env.safeAuthorizationEnabled,
+    safeClient,
+    getSignerBytecode: async ({ chainId, address }) => {
+      const chain = registry.chainsById.get(chainId);
+      if (!chain) {
+        return null;
+      }
+      const code = await withRpcFallback(chain, async (client) =>
+        client.getBytecode({ address: address as `0x${string}` }),
+      );
+      return code ?? null;
+    },
   });
 
   for (const chain of registry.chainsById.values()) {
@@ -133,7 +165,7 @@ async function main(): Promise<void> {
         return;
       }
       tickInFlight = true;
-      processRelayerWorkerTick({
+      const workerPromise = processRelayerWorkerTick({
         executions,
         executionEvents,
         relayerTransactions,
@@ -142,7 +174,33 @@ async function main(): Promise<void> {
         batchSize: env.relayerWorkerBatchSize,
         submitRetryCount: 3,
         ozPollBackoff,
-      })
+      });
+      const authorizationPromise =
+        env.safeAuthorizationEnabled && safeClient
+          ? processAuthorizationWorkerTick({
+              executions,
+              executionEvents,
+              registry,
+              safeClient,
+              batchSize: env.relayerWorkerBatchSize,
+              pollBaseDelayMs: env.safeAuthorizationPollBaseDelayMs,
+              pollMaxDelayMs: env.safeAuthorizationPollMaxDelayMs,
+              metrics,
+              validateRelaySignature: (input) =>
+                validateRelaySignature({
+                  registry,
+                  chainId: input.chainId,
+                  signer: input.signer,
+                  digest: input.digest,
+                  signature: input.signature,
+                }),
+              getRelayerSigner: async (ozRelayerId) => {
+                const relayer = await relayerClient.getRelayer(ozRelayerId);
+                return relayer.address;
+              },
+            })
+          : Promise.resolve();
+      Promise.all([authorizationPromise, workerPromise])
         .catch((error) => {
           app.log.error({ err: error }, "Relayer worker tick failed");
         })

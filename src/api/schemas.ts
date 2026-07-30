@@ -134,11 +134,28 @@ export const CreateRelayExecutionRequestSchema = Type.Union([
         description: "Relay via `runMacro` with a ClearMacro digest signature.",
       }),
       ...SharedCreateRelayFields,
-      signature: Type.Unsafe<typeof Bytes>({
-        ...Bytes,
-        description:
-          "Signature over `ClearMacroForwarderV1.getDigest(m, encodedPayload)`; request `macroAddress` is the macro contract (`m`).",
-      }),
+      signature: Type.Optional(
+        Type.Unsafe<typeof Bytes>({
+          ...Bytes,
+          description:
+            "Signature over `ClearMacroForwarderV1.getDigest(m, encodedPayload)`; request `macroAddress` is the macro contract (`m`).",
+        }),
+      ),
+      authorization: Type.Optional(
+        Type.Object(
+          {
+            type: Type.Literal("safeMessageV1", {
+              description:
+                "Authorize via Safe Message; provider polls until ERC-1271 validates the ClearMacro digest.",
+            }),
+            safeMessageHash: Type.Unsafe<typeof Bytes32>({
+              ...Bytes32,
+              description: "Safe Transaction Service message hash for the proposed EIP-712 payload.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     },
     {
       additionalProperties: false,
@@ -248,6 +265,7 @@ const RelayExecutionTransactionSchema = Type.Object({
 
 const RelayExecutionStateSchema = Type.Union(
   [
+    Type.Literal("awaiting_authorization"),
     Type.Literal("pending"),
     Type.Literal("submitted"),
     Type.Literal("succeeded"),
@@ -259,9 +277,19 @@ const RelayExecutionStateSchema = Type.Union(
   ],
   {
     description:
-      "`pending` means accepted but no current transaction hash is known. `submitted` means a current transaction hash is known. `succeeded`, `reverted`, `rejected`, `failed`, `expired`, and `canceled` are terminal.",
+      "`awaiting_authorization` means a Safe message authorization is pending. `pending` means accepted but no current transaction hash is known. `submitted` means a current transaction hash is known. `succeeded`, `reverted`, `rejected`, `failed`, `expired`, and `canceled` are terminal.",
   },
 );
+
+const RelayAuthorizationProgressSchema = Type.Object({
+  type: Type.Literal("safeMessageV1"),
+  safeMessageHash: Bytes32,
+  messageLink: Type.Optional(
+    Type.String({
+      description: "Deep link to review the Safe message in the Safe web app.",
+    }),
+  ),
+});
 
 export const RelayExecutionResponseSchema = Type.Object(
   {
@@ -324,6 +352,7 @@ export const RelayExecutionResponseSchema = Type.Object(
     transaction: Type.Optional(RelayExecutionTransactionSchema),
     receipt: Type.Optional(RelayExecutionReceiptSchema),
     error: Type.Optional(RelayExecutionErrorSchema),
+    authorization: Type.Optional(RelayAuthorizationProgressSchema),
     timestamps: Type.Object({
       createdAt: Type.String({ description: "Execution creation timestamp." }),
       updatedAt: Type.String({
@@ -450,6 +479,12 @@ export const CapabilitiesResponseSchema = Type.Object({
         {
           description: "Relay kinds supported by this provider on the chain.",
         },
+      ),
+      supportedAuthorizationMethods: Type.Optional(
+        Type.Array(Type.Literal("safeMessageV1"), {
+          description:
+            "Authorization methods supported for `clearMacroV1` on this chain.",
+        }),
       ),
       macroPolicy: Type.Unsafe<typeof CapabilitiesMacroPolicySchema>({
         ...CapabilitiesMacroPolicySchema,

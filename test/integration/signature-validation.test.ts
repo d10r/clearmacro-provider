@@ -147,4 +147,65 @@ describe("signature validation", () => {
     });
     expect(valid).toBe(false);
   });
+
+  it("passes the ClearMacro digest to ERC-1271 isValidSignature", async () => {
+    const clearMacroDigest = `0x${"11".repeat(32)}`;
+    const safeMessageHash = `0x${"22".repeat(32)}`;
+    const capturedArgs: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number | string | null; params?: unknown[] };
+        if (body.method === "eth_getCode") {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x6001" }), { status: 200 });
+        }
+        if (body.method === "eth_call") {
+          capturedArgs.push(body.params);
+          return new Response(
+            JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x1626ba7e00000000000000000000000000000000000000000000000000000000" }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }), { status: 200 });
+      }),
+    );
+
+    const valid = await validateRelaySignature({
+      registry: makeRegistry("http://rpc.test"),
+      chainId: 1,
+      signer: "0x00000000000000000000000000000000000000aa",
+      digest: clearMacroDigest,
+      signature: "0x1234",
+    });
+    expect(valid).toBe(true);
+    expect(capturedArgs.length).toBeGreaterThan(0);
+    const callData = JSON.stringify(capturedArgs);
+    expect(callData).toContain(clearMacroDigest.slice(2));
+    expect(callData).not.toContain(safeMessageHash.slice(2));
+  });
+
+  it("rejects ERC-1271 validation when digest is tampered", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number | string | null };
+        if (body.method === "eth_getCode") {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x6001" }), { status: 200 });
+        }
+        if (body.method === "eth_call") {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: "0x00000000" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }), { status: 200 });
+      }),
+    );
+
+    const valid = await validateRelaySignature({
+      registry: makeRegistry("http://rpc.test"),
+      chainId: 1,
+      signer: "0x00000000000000000000000000000000000000aa",
+      digest: `0x${"11".repeat(32)}`,
+      signature: "0x1234",
+    });
+    expect(valid).toBe(false);
+  });
 });

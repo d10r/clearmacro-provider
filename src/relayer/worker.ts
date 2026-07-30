@@ -60,6 +60,36 @@ function failPermit2State(
   });
 }
 
+/**
+ * Pending clearMacroV1 rows must always carry a signature after
+ * `createPending` / `promoteToPending`. Never substitute `"0x"`.
+ */
+function requireClearMacroSignature(
+  deps: RelayerWorkerDeps,
+  execution: { id: string; signature: string | null },
+): string | null {
+  if (execution.signature) {
+    return execution.signature;
+  }
+  deps.executions.transitionState(execution.id, "failed", {
+    errorJson: JSON.stringify({
+      code: "INTERNAL_INVARIANT",
+      message:
+        "clearMacroV1 pending execution is missing signature; pending rows must have a signature after createPending/promoteToPending.",
+      category: "provider",
+      retryable: false,
+    }),
+  });
+  deps.executionEvents.append({
+    executionId: execution.id,
+    type: "terminal_error_set",
+    actor: "worker",
+    reason: "Missing signature on pending clearMacroV1 execution",
+    detailsJson: JSON.stringify({}),
+  });
+  return null;
+}
+
 async function loadPermit2Context(
   deps: RelayerWorkerDeps,
   execution: {
@@ -294,6 +324,10 @@ export async function processRelayerWorkerTick(
             continue;
           }
         } else {
+          const signature = requireClearMacroSignature(deps, execution);
+          if (!signature) {
+            continue;
+          }
           const preflightFn = deps.preflightSimulation ?? preflightRunMacro;
           const preflight = await preflightFn({
             chain,
@@ -302,7 +336,7 @@ export async function processRelayerWorkerTick(
             encodedPayload: execution.payload,
             signer: execution.signerAddress,
             relayerSigner: relayer.address,
-            signature: execution.signature,
+            signature,
             msgValue: execution.value,
           });
           if (
@@ -349,11 +383,15 @@ export async function processRelayerWorkerTick(
           encodedPayload: execution.payload,
         });
       } else {
+        const signature = requireClearMacroSignature(deps, execution);
+        if (!signature) {
+          continue;
+        }
         txData = buildRunMacroCalldata({
           macro: execution.macroAddress,
           encodedPayload: execution.payload,
           signer: execution.signerAddress,
-          signature: execution.signature,
+          signature,
         });
       }
 

@@ -34,6 +34,8 @@ pnpm run dev
 
 The app reads `.env`. Required variables include `DATABASE_PATH`, `OZ_RELAYER_API_KEY`, and `PROVIDER_NAME`. Inside `compose.prod.yaml`, the app uses `OZ_RELAYER_URL` defaulting to `http://oz-relayer:8080`. Production admin commands (`prod:apply-config`, `prod:check-config`) are invoked from the host but execute in a one-off Compose `admin` container on the same network (`http://oz-relayer:8080`); the OZ relayer is not published to host ports. If API auth is enabled, set `API_AUTH_ENABLED=true` and `API_CLIENTS_JSON`.
 
+Optional Safe message authorization (`safeMessageV1` for `clearMacroV1`): set `SAFE_API_KEY` to enable (omit the key to leave it off). Use `SAFE_AUTHORIZATION_ENABLED=false` as a kill switch while keeping the key configured; `true` without a key is rejected at startup. Poll/retry knobs and optional `SAFE_TX_SERVICE_URL` are documented in `.env.example`. When enabled, capabilities may advertise `supportedAuthorizationMethods`, and executions can sit in `awaiting_authorization` until the authorization worker promotes them.
+
 Useful checks:
 
 ```bash

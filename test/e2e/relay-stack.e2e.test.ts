@@ -9,8 +9,11 @@ import { clearMacroPayloadAbiParameters } from "../../src/validation/clearmacro.
 import {
   allocateHostPort,
   approveErc20,
+  authorizeMockErc1271Safe,
   chmodStackTree,
+  configureSafeTxStub,
   deployFullStackE2EContractsOnAnvil,
+  deployMockErc1271Safe,
   dockerComposeLogs,
   ensureAnvilKeystore,
   forgeBuildFullStackFixtures,
@@ -37,6 +40,7 @@ import {
 } from "../fixtures/relay-fixtures.js";
 
 const E2E_OZ_API_KEY = "local-e2e-oz-relayer-api-key-32chars!!";
+const E2E_SAFE_API_KEY = "local-e2e-safe-tx-service-api-key!!";
 const CHAIN_ID_HEX = "0x7a69" as Hex;
 
 /** Anvil default account #2 — distinct from relayer signer (OZ keystore). */
@@ -92,6 +96,31 @@ async function pollUntilSucceededWithReceipt(
     await new Promise((r) => setTimeout(r, 600));
   }
   throw new Error(`Relay did not reach succeeded + success receipt within ${timeoutMs}ms; last: ${JSON.stringify(last)}`);
+}
+
+async function pollUntilState(getUrl: string, state: string, timeoutMs: number): Promise<RelayPollBody> {
+  const started = Date.now();
+  let last: RelayPollBody | undefined;
+  while (Date.now() - started < timeoutMs) {
+    const res = await fetch(getUrl);
+    expect(res.ok).toBe(true);
+    const body = (await res.json()) as RelayPollBody;
+    last = body;
+    if (body.state === state) {
+      return body;
+    }
+    if (
+      body.state === "failed" ||
+      body.state === "canceled" ||
+      body.state === "expired" ||
+      body.state === "rejected" ||
+      body.state === "reverted"
+    ) {
+      throw new Error(`Relay reached terminal state ${body.state}: ${JSON.stringify(body)}`);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`Relay did not reach state ${state} within ${timeoutMs}ms; last: ${JSON.stringify(last)}`);
 }
 
 describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
@@ -573,6 +602,187 @@ describeStack("relay stack (Docker + ClearMacro)", { timeout: 360_000 }, () => {
         account: requestSigner.address,
       });
       expect(balanceAfter - balanceBefore).toBe(permitAmount);
+    } catch (error) {
+      failWithLogs(error instanceof Error ? error.message : String(error));
+    } finally {
+      try {
+        runDockerCompose(repoRoot, project, ["down", "-v", "--remove-orphans"], composeEnv());
+      } catch {
+        // ignore teardown errors
+      }
+      try {
+        rmSync(stackDir, { recursive: true, force: true });
+      } catch {
+        // ignore temp cleanup errors
+      }
+    }
+  });
+
+  it("safeMessageV1: mock Safe + TX stub, authorize digest on Anvil, poll to succeeded", async () => {
+    const repoRoot = getRepoRoot();
+    const project = `cme2esafe${process.pid}${randomBytes(3).toString("hex")}`;
+    const anvilPort = await allocateHostPort();
+    const appPort = await allocateHostPort();
+    const ozHostPort = await allocateHostPort();
+    const safeStubPort = await allocateHostPort();
+    const stackDir = makeStackWorkDir();
+    const anvilHostRpc = `http://127.0.0.1:${anvilPort}`;
+    const appBase = `http://127.0.0.1:${appPort}`;
+    const ozHostBase = `http://127.0.0.1:${ozHostPort}`;
+    const safeStubBase = `http://127.0.0.1:${safeStubPort}`;
+
+    const chain = {
+      id: 31337,
+      name: "anvil",
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      rpcUrls: { default: { http: [anvilHostRpc] } },
+    } as const;
+
+    const composeEnv = (): Record<string, string> => ({
+      E2E_ANVIL_HOST_PORT: String(anvilPort),
+      E2E_APP_HOST_PORT: String(appPort),
+      E2E_OZ_HOST_PORT: String(ozHostPort),
+      E2E_SAFE_TX_STUB_HOST_PORT: String(safeStubPort),
+      E2E_STACK_CONFIG_DIR: stackDir,
+      E2E_OZ_RELAYER_API_KEY: E2E_OZ_API_KEY,
+      SAFE_API_KEY: E2E_SAFE_API_KEY,
+      SAFE_TX_SERVICE_URL: "http://safe-tx-stub:8080/api",
+      SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS: "500",
+      SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS: "5000",
+      OZ_KEYSTORE_PASSPHRASE: process.env.OZ_KEYSTORE_PASSPHRASE ?? "change-me",
+      OZ_STORAGE_ENCRYPTION_KEY: process.env.OZ_STORAGE_ENCRYPTION_KEY ?? "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      OZ_RELAYER_UID: String(typeof process.getuid === "function" ? process.getuid() : 1000),
+      OZ_RELAYER_GID: String(typeof process.getgid === "function" ? process.getgid() : 1000),
+    });
+
+    const failWithLogs = (msg: string): never => {
+      let logs = "(could not fetch logs)";
+      try {
+        logs = dockerComposeLogs(repoRoot, project, composeEnv());
+      } catch {
+        // keep fallback
+      }
+      throw new Error(`${msg}\n--- docker compose logs ---\n${logs}`);
+    };
+
+    const publicClient = createPublicClient({ chain, transport: http(anvilHostRpc) });
+    const safeOwner = privateKeyToAccount(E2E_REQUEST_SIGNER_PK);
+
+    try {
+      forgeBuildFullStackFixtures(repoRoot);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "anvil"], composeEnv());
+      await waitForJsonRpcChainId(anvilHostRpc, CHAIN_ID_HEX, 45_000);
+      await setERC1820RegistryCode({ repoRoot, rpcUrl: anvilHostRpc });
+
+      const relayerSigner = privateKeyToAccount(RELAYER_SIGNER_PRIVATE_KEY);
+      const deployed = await deployFullStackE2EContractsOnAnvil({
+        repoRoot,
+        relayerSigner: relayerSigner.address,
+        rpcUrl: anvilHostRpc,
+      });
+      const mockSafe = await deployMockErc1271Safe({ repoRoot, rpcUrl: anvilHostRpc });
+
+      await fundNativeBalance(anvilHostRpc, deployed.relayerSigner, 50n * 10n ** 18n);
+
+      ensureAnvilKeystore(repoRoot, join(stackDir, "keys"));
+      writeOzRelayerConfig(stackDir);
+      writeProviderRegistry(stackDir, deployed.forwarderAddress, deployed.macroAddress);
+      chmodStackTree(stackDir);
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "redis"], composeEnv());
+      runDockerCompose(repoRoot, project, ["up", "-d", "safe-tx-stub"], composeEnv());
+      await waitForHttpOk(`${safeStubBase}/healthz`, 60_000);
+      await configureSafeTxStub(safeStubBase, {
+        safe: mockSafe,
+        owners: [safeOwner.address],
+      });
+
+      runDockerCompose(repoRoot, project, ["up", "-d", "oz-relayer"], composeEnv());
+      await waitForOzRelayerReady(ozHostBase, 120_000);
+      runDockerCompose(repoRoot, project, ["up", "-d", "app"], composeEnv());
+
+      await waitForHttpOk(`${appBase}/healthz`, 120_000);
+      await waitForReadyz(appBase, 120_000);
+
+      const capRes = await fetch(`${appBase}/v1/capabilities`);
+      expect(capRes.ok).toBe(true);
+      const caps = (await capRes.json()) as {
+        chains: Array<{ chainId: number; supportedAuthorizationMethods?: string[] }>;
+      };
+      expect(caps.chains[0]?.supportedAuthorizationMethods).toEqual(["safeMessageV1"]);
+
+      const salt = randomBytes(32);
+      const nonce = await publicClient.readContract({
+        address: deployed.forwarderAddress,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getNonce",
+        args: [mockSafe, 0n],
+      });
+
+      const actionParams = encodeAbiParameters([{ type: "bytes32", name: "salt" }], [`0x${salt.toString("hex")}` as Hex]);
+      const payload = encodeAbiParameters(clearMacroPayloadAbiParameters, [
+        {
+          action: { params: actionParams },
+          security: {
+            domain: "e2e",
+            macroContract: deployed.macroAddress,
+            provider: "macros.superfluid.eth",
+            validAfter: 0n,
+            validBefore: 0n,
+            nonce,
+          },
+        },
+      ]) as Hex;
+
+      const digest = (await publicClient.readContract({
+        address: deployed.forwarderAddress,
+        abi: clearMacroForwarderV1Abi,
+        functionName: "getDigest",
+        args: [deployed.macroAddress as Address, payload],
+      })) as Hex;
+
+      const safeMessageHash = `0x${randomBytes(32).toString("hex")}` as Hex;
+
+      const postRes = await fetch(`${appBase}/v1/relay-executions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "clearMacroV1",
+          chainId: 31337,
+          macroAddress: deployed.macroAddress,
+          signerAddress: mockSafe,
+          payload,
+          authorization: {
+            type: "safeMessageV1",
+            safeMessageHash,
+          },
+          value: "0",
+        }),
+      });
+      expect(postRes.status).toBe(202);
+      const created = (await postRes.json()) as {
+        state: string;
+        terminal: boolean;
+        authorization?: { type: string; safeMessageHash: string };
+        links: { self: string };
+      };
+      expect(created.state).toBe("awaiting_authorization");
+      expect(created.terminal).toBe(false);
+      expect(created.authorization?.type).toBe("safeMessageV1");
+      expect(created.authorization?.safeMessageHash).toBe(safeMessageHash);
+
+      const selfUrl = `${appBase}${created.links.self}`;
+      await pollUntilState(selfUrl, "awaiting_authorization", 30_000);
+
+      await authorizeMockErc1271Safe({
+        rpcUrl: anvilHostRpc,
+        safeAddress: mockSafe,
+        digest,
+      });
+
+      const final = await pollUntilSucceededWithReceipt(selfUrl, 180_000);
+      expect(final.receipt.status).toBe("success");
     } catch (error) {
       failWithLogs(error instanceof Error ? error.message : String(error));
     } finally {

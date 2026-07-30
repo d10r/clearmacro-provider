@@ -332,10 +332,14 @@ async function persistExecution(
       executionId: inserted.id,
       type: "state_changed",
       actor: "api",
-      reason: "Execution created after synchronous validation",
+      reason:
+        inserted.state === "awaiting_authorization"
+          ? "Execution created awaiting Safe message authorization"
+          : "Execution created after synchronous validation",
       detailsJson: JSON.stringify({
         chainId: inserted.chainId,
         kind: inserted.kind,
+        state: inserted.state,
       }),
     });
     return { statusCode: 202, row: inserted };
@@ -480,11 +484,49 @@ function persistCreatedExecution(
   ctx: SharedAdmissionContext,
   digest: string,
   input: {
-    signature: string;
+    signature: string | null;
     permit2Json: string | null;
-    preflightOutcome: SuccessfulPreflightOutcome;
+    preflightOutcome?: SuccessfulPreflightOutcome;
+    authorization?: {
+      type: "safeMessageV1";
+      safeMessageHash: string;
+    };
   },
 ): Promise<AdmitRelayExecutionResult> {
+  if (input.authorization) {
+    const authorization = input.authorization;
+    return persistExecution(deps, ctx, digest, () =>
+      deps.executions.createAwaitingAuthorization({
+        clientId: ctx.clientId,
+        clientRequestId: ctx.body.clientRequestId ?? null,
+        requestBodyHash: ctx.auditBase.requestBodyHash,
+        digest,
+        domain: ctx.decoded.domain,
+        kind: ctx.body.kind,
+        chainId: ctx.body.chainId,
+        ozRelayerId: ctx.ozRelayerId,
+        forwarderAddress: ctx.forwarderAddress,
+        macroAddress: ctx.body.macroAddress.toLowerCase(),
+        signerAddress: ctx.body.signerAddress.toLowerCase(),
+        nonce: ctx.decoded.nonce.toString(),
+        validAfter: ctx.decoded.validAfter.toString(),
+        validBefore: ctx.decoded.validBefore.toString(),
+        value: ctx.body.value ?? "0",
+        payload: ctx.body.payload,
+        signature: input.signature,
+        permit2Json: input.permit2Json,
+        metadataJson: JSON.stringify(ctx.metadata),
+        forceAfterPreflightRevert: 0,
+        requiredConfirmations: ctx.requiredConfirmations,
+        authorizationType: authorization.type,
+        safeMessageHash: authorization.safeMessageHash,
+      }),
+    );
+  }
+  const preflightOutcome = input.preflightOutcome;
+  if (!input.signature || !preflightOutcome) {
+    throw new Error("persistCreatedExecution requires signature and preflight for pending rows");
+  }
   return persistExecution(deps, ctx, digest, () =>
     deps.executions.createPending({
       clientId: ctx.clientId,
@@ -505,9 +547,8 @@ function persistCreatedExecution(
       payload: ctx.body.payload,
       signature: input.signature,
       permit2Json: input.permit2Json,
-      metadataJson: JSON.stringify(input.preflightOutcome.metadata),
-      forceAfterPreflightRevert:
-        input.preflightOutcome.forceAfterPreflightRevert,
+      metadataJson: JSON.stringify(preflightOutcome.metadata),
+      forceAfterPreflightRevert: preflightOutcome.forceAfterPreflightRevert,
       requiredConfirmations: ctx.requiredConfirmations,
     }),
   );
@@ -552,7 +593,100 @@ async function admitClearMacroV1(
   if (ctx.body.kind !== "clearMacroV1") {
     throw new Error("unexpected kind");
   }
+
+  if (ctx.body.authorization?.type === "safeMessageV1") {
+    if (!deps.safeAuthorizationEnabled || !deps.safeClient) {
+      audit(deps, ctx.auditBase, "VALIDATION_ERROR", null, digest);
+      return {
+        error: new ApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Safe message authorization is not enabled for this provider.",
+          "validation",
+          false,
+        ),
+      };
+    }
+    if (!deps.safeClient.isChainSupported(ctx.body.chainId)) {
+      audit(deps, ctx.auditBase, "VALIDATION_ERROR", null, digest);
+      return {
+        error: new ApiError(
+          403,
+          "CHAIN_NOT_ALLOWED",
+          "Safe message authorization is not supported on this chain.",
+          "validation",
+          false,
+        ),
+      };
+    }
+    let bytecode: string | null;
+    try {
+      bytecode = deps.getSignerBytecode
+        ? await deps.getSignerBytecode({
+            chainId: ctx.body.chainId,
+            address: ctx.body.signerAddress.toLowerCase(),
+          })
+        : null;
+    } catch {
+      audit(deps, ctx.auditBase, "CHAIN_UNAVAILABLE", null, digest);
+      return {
+        error: new ApiError(
+          503,
+          "CHAIN_UNAVAILABLE",
+          "Unable to verify signer contract code.",
+          "chain",
+          true,
+        ),
+      };
+    }
+    if (!bytecode || bytecode === "0x") {
+      audit(deps, ctx.auditBase, "VALIDATION_ERROR", null, digest);
+      return {
+        error: new ApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Safe message authorization requires a contract signer.",
+          "user",
+          false,
+        ),
+      };
+    }
+    try {
+      await deps.safeClient.assertEoaOwners(
+        ctx.body.signerAddress.toLowerCase(),
+        ctx.body.chainId,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Safe owner configuration is unsupported.";
+      audit(deps, ctx.auditBase, "VALIDATION_ERROR", null, digest);
+      return {
+        error: new ApiError(422, "VALIDATION_ERROR", message, "user", false),
+      };
+    }
+    return persistCreatedExecution(deps, ctx, digest, {
+      signature: null,
+      permit2Json: null,
+      authorization: {
+        type: "safeMessageV1",
+        safeMessageHash: ctx.body.authorization.safeMessageHash,
+      },
+    });
+  }
+
   const signature = ctx.body.signature;
+  if (!signature) {
+    audit(deps, ctx.auditBase, "VALIDATION_ERROR", null, digest);
+    return {
+      error: new ApiError(
+        400,
+        "VALIDATION_ERROR",
+        "clearMacroV1 requests require signature or authorization.",
+        "validation",
+        false,
+      ),
+    };
+  }
 
   const signatureError = await validateDigestSignature(
     deps,

@@ -38,10 +38,16 @@ export type RelayExecutionRow = {
   validBefore: string;
   value: string;
   payload: string;
-  signature: string;
+  signature: string | null;
   permit2Json: string | null;
   metadataJson: string;
   forceAfterPreflightRevert: number;
+  authorizationType: string | null;
+  safeMessageHash: string | null;
+  authorizationPollAt: string | null;
+  authorizationPollAttempts: number;
+  authorizationLastErrorJson: string | null;
+  signatureSource: string | null;
   currentTransactionHash: string | null;
   transactionHashesJson: string;
   receiptJson: string | null;
@@ -65,7 +71,20 @@ export type NewRelayExecution = Omit<
   | "createdAt"
   | "updatedAt"
   | "terminalAt"
->;
+  | "authorizationType"
+  | "safeMessageHash"
+  | "authorizationPollAt"
+  | "authorizationPollAttempts"
+  | "authorizationLastErrorJson"
+  | "signatureSource"
+> & {
+  authorizationType?: string | null;
+  safeMessageHash?: string | null;
+  authorizationPollAt?: string | null;
+  authorizationPollAttempts?: number;
+  authorizationLastErrorJson?: string | null;
+  signatureSource?: string | null;
+};
 
 export type RelayExecutionEvent = {
   id: string;
@@ -130,10 +149,17 @@ const mapRelayExecution = (row: Record<string, unknown>): RelayExecutionRow => (
   validBefore: String(row.valid_before),
   value: String(row.value),
   payload: String(row.payload),
-  signature: String(row.signature),
+  signature: row.signature === null ? null : String(row.signature),
   permit2Json: row.permit2_json === null ? null : String(row.permit2_json),
   metadataJson: String(row.metadata_json),
   forceAfterPreflightRevert: Number(row.force_after_preflight_revert),
+  authorizationType: row.authorization_type === null ? null : String(row.authorization_type),
+  safeMessageHash: row.safe_message_hash === null ? null : String(row.safe_message_hash),
+  authorizationPollAt: row.authorization_poll_at === null ? null : String(row.authorization_poll_at),
+  authorizationPollAttempts: Number(row.authorization_poll_attempts ?? 0),
+  authorizationLastErrorJson:
+    row.authorization_last_error_json === null ? null : String(row.authorization_last_error_json),
+  signatureSource: row.signature_source === null ? null : String(row.signature_source),
   currentTransactionHash: row.current_transaction_hash === null ? null : String(row.current_transaction_hash),
   transactionHashesJson: String(row.transaction_hashes_json),
   receiptJson: row.receipt_json === null ? null : String(row.receipt_json),
@@ -160,9 +186,11 @@ export class RelayExecutionRepository {
             id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
             chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, nonce,
             valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, force_after_preflight_revert,
+            authorization_type, safe_message_hash, authorization_poll_at, authorization_poll_attempts,
+            authorization_last_error_json, signature_source,
             current_transaction_hash, transaction_hashes_json, receipt_json,
             required_confirmations, last_error_json, created_at, updated_at, terminal_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
       )
       .run(
         id,
@@ -191,6 +219,125 @@ export class RelayExecutionRepository {
         timestamp,
       );
     return this.getByIdOrThrow(id);
+  }
+
+  createAwaitingAuthorization(
+    input: NewRelayExecution & {
+      authorizationType: "safeMessageV1";
+      safeMessageHash: string;
+    },
+  ): RelayExecutionRow {
+    const timestamp = nowIso();
+    const id = randomUUID();
+    this.client.db
+      .prepare(
+        `INSERT INTO relay_executions(
+            id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
+            chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, nonce,
+            valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, force_after_preflight_revert,
+            authorization_type, safe_message_hash, authorization_poll_at, authorization_poll_attempts,
+            authorization_last_error_json, signature_source,
+            current_transaction_hash, transaction_hashes_json, receipt_json,
+            required_confirmations, last_error_json, created_at, updated_at, terminal_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'awaiting_authorization', 0, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, '[]', NULL, ?, NULL, ?, ?, NULL)`,
+      )
+      .run(
+        id,
+        input.clientId,
+        input.clientRequestId,
+        input.requestBodyHash,
+        input.digest,
+        input.domain,
+        input.kind,
+        input.chainId,
+        input.ozRelayerId,
+        input.forwarderAddress,
+        input.macroAddress,
+        input.signerAddress,
+        input.nonce,
+        input.validAfter,
+        input.validBefore,
+        input.value,
+        input.payload,
+        input.permit2Json,
+        input.metadataJson,
+        input.forceAfterPreflightRevert,
+        input.authorizationType,
+        input.safeMessageHash,
+        timestamp,
+        input.requiredConfirmations,
+        timestamp,
+        timestamp,
+      );
+    return this.getByIdOrThrow(id);
+  }
+
+  listAwaitingAuthorizationDue(limit: number, nowIsoValue = nowIso()): RelayExecutionRow[] {
+    const rows = this.client.db
+      .prepare(
+        `SELECT * FROM relay_executions
+         WHERE terminal = 0 AND state = 'awaiting_authorization'
+           AND (authorization_poll_at IS NULL OR authorization_poll_at <= ?)
+         ORDER BY authorization_poll_at ASC, created_at ASC
+         LIMIT ?`,
+      )
+      .all(nowIsoValue, limit) as Record<string, unknown>[];
+    return rows.map(mapRelayExecution);
+  }
+
+  scheduleAuthorizationPoll(
+    executionId: string,
+    input: {
+      pollAt: string;
+      pollAttempts: number;
+      lastErrorJson?: string | null;
+    },
+  ): RelayExecutionRow {
+    this.client.db
+      .prepare(
+        `UPDATE relay_executions
+         SET authorization_poll_at = ?, authorization_poll_attempts = ?,
+             authorization_last_error_json = COALESCE(?, authorization_last_error_json),
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        input.pollAt,
+        input.pollAttempts,
+        input.lastErrorJson ?? null,
+        nowIso(),
+        executionId,
+      );
+    return this.getByIdOrThrow(executionId);
+  }
+
+  promoteToPending(
+    executionId: string,
+    input: { signature: string; signatureSource: string; forceAfterPreflightRevert: number },
+  ): RelayExecutionRow {
+    return this.client.transaction(() => {
+      const existing = this.getByIdOrThrow(executionId);
+      if (existing.state !== "awaiting_authorization") {
+        throw new Error(`Cannot promote execution ${executionId} from state ${existing.state}`);
+      }
+      assertTransitionState("awaiting_authorization", "pending");
+      const timestamp = nowIso();
+      this.client.db
+        .prepare(
+          `UPDATE relay_executions
+           SET state = 'pending', signature = ?, signature_source = ?, force_after_preflight_revert = ?,
+               authorization_poll_at = NULL, updated_at = ?
+           WHERE id = ? AND state = 'awaiting_authorization'`,
+        )
+        .run(
+          input.signature,
+          input.signatureSource,
+          input.forceAfterPreflightRevert,
+          timestamp,
+          executionId,
+        );
+      return this.getByIdOrThrow(executionId);
+    });
   }
 
   getById(id: string): RelayExecutionRow | undefined {
