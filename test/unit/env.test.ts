@@ -1,31 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { loadEnv } from "../../src/config/env.js";
 
-beforeEach(() => {
-  delete process.env.DATABASE_PATH;
-  delete process.env.OZ_RELAYER_URL;
-  delete process.env.OZ_RELAYER_API_KEY;
-  delete process.env.PROVIDER_NAME;
-  delete process.env.PORT;
-  delete process.env.API_AUTH_ENABLED;
-  delete process.env.API_CLIENTS_JSON;
-  delete process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS;
-  delete process.env.SAFE_API_KEY;
-  delete process.env.SAFE_AUTHORIZATION_ENABLED;
-});
+const ENV_KEYS = [
+  "DATABASE_PATH",
+  "OZ_RELAYER_URL",
+  "OZ_RELAYER_API_KEY",
+  "PROVIDER_NAME",
+  "PORT",
+  "API_AUTH_ENABLED",
+  "API_CLIENTS_JSON",
+  "RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS",
+  "SAFE_API_KEY",
+  "SAFE_AUTHORIZATION_ENABLED",
+] as const;
 
-afterEach(() => {
-  delete process.env.DATABASE_PATH;
-  delete process.env.OZ_RELAYER_URL;
-  delete process.env.OZ_RELAYER_API_KEY;
-  delete process.env.PROVIDER_NAME;
-  delete process.env.PORT;
-  delete process.env.API_AUTH_ENABLED;
-  delete process.env.API_CLIENTS_JSON;
-  delete process.env.RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS;
-  delete process.env.SAFE_API_KEY;
-  delete process.env.SAFE_AUTHORIZATION_ENABLED;
-});
+function clearEnv(): void {
+  for (const key of ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+beforeEach(clearEnv);
 
 function setRequiredEnv(): void {
   process.env.OZ_RELAYER_URL = "http://localhost:8080";
