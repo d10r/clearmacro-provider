@@ -7,6 +7,10 @@ services:
     # Run as root here so migrations and WAL can write under `/data` (same pattern as compose.e2e.yaml).
     user: "0:0"
     restart: unless-stopped
+    # Host `.env` is the source of truth for optional knobs (SAFE_*, readiness, batch size, …).
+    # Keep listing only container overrides + compose-time required checks here.
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -16,20 +20,6 @@ services:
       OZ_RELAYER_URL: ${OZ_RELAYER_URL:-http://oz-relayer:8080}
       OZ_RELAYER_API_KEY: ${OZ_RELAYER_API_KEY:?set OZ_RELAYER_API_KEY}
       PROVIDER_NAME: ${PROVIDER_NAME:?set PROVIDER_NAME}
-      RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
-      RELAYER_WORKER_ENABLED: ${RELAYER_WORKER_ENABLED:-true}
-      RELAYER_WORKER_POLL_INTERVAL_MS: ${RELAYER_WORKER_POLL_INTERVAL_MS:-2000}
-      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
-      API_CLIENTS_JSON: ${API_CLIENTS_JSON:-}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Safe auth: host `.env` SAFE_API_KEY enables safeMessageV1; optional kill switch / poll knobs.
-      SAFE_API_KEY: ${SAFE_API_KEY:-}
-      SAFE_AUTHORIZATION_ENABLED: ${SAFE_AUTHORIZATION_ENABLED:-}
-      SAFE_API_RETRY_MAX_ATTEMPTS: ${SAFE_API_RETRY_MAX_ATTEMPTS:-3}
-      SAFE_API_RETRY_BASE_DELAY_MS: ${SAFE_API_RETRY_BASE_DELAY_MS:-250}
-      SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS: ${SAFE_AUTHORIZATION_POLL_BASE_DELAY_MS:-5000}
-      SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS: ${SAFE_AUTHORIZATION_POLL_MAX_DELAY_MS:-60000}
-      SAFE_TX_SERVICE_URL: ${SAFE_TX_SERVICE_URL:-}
     ports:
       - "${CLEARMACRO_PROVIDER_HOST_PORT:-3000}:3000"
     depends_on:

@@ -1,5 +1,6 @@
 import eslint from "@eslint/js";
 import { defineConfig, globalIgnores } from "eslint/config";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
@@ -13,6 +14,10 @@ export default defineConfig(
     "superfluid-dashboard/**",
     "protocol-monorepo/**",
     "tmp/**",
+    ".tmp/**",
+    ".cache/**",
+    ".corepack/**",
+    ".pnpm-store/**",
     "test/fixtures/contracts/out/**",
     "test/fixtures/contracts/cache/**",
     "test/fixtures/contracts/lib/**",
@@ -20,4 +25,22 @@ export default defineConfig(
   ]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["**/*.{js,mjs,cjs}"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
 );
