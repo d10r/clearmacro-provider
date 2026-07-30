@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase } from "../../src/db/client.js";
-import { migrations, runMigrations } from "../../src/db/migrations.js";
+import { runMigrations, runMigrationsUntil } from "../../src/db/migrations.js";
 import { RelayExecutionEventRepository, RelayExecutionRepository } from "../../src/db/repositories.js";
 
 function makeDb() {
@@ -258,29 +258,7 @@ describe("db migrations and repositories", () => {
 
   it("applies migration 003 while child foreign-key rows still reference relay_executions", () => {
     const db = makeDb();
-    db.db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version text PRIMARY KEY,
-        applied_at text NOT NULL
-      );
-    `);
-    const insertVersion = db.db.prepare(
-      "INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)",
-    );
-    for (const migration of migrations) {
-      if (migration.version === "003_safe_message_authorization") {
-        break;
-      }
-      db.db.exec("PRAGMA foreign_keys = OFF;");
-      try {
-        db.transaction(() => {
-          db.db.exec(migration.sql);
-          insertVersion.run(migration.version, new Date().toISOString());
-        });
-      } finally {
-        db.db.exec("PRAGMA foreign_keys = ON;");
-      }
-    }
+    runMigrationsUntil(db, "003_safe_message_authorization");
 
     const now = new Date().toISOString();
     db.db

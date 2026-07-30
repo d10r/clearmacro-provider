@@ -5,8 +5,7 @@ type Migration = {
   sql: string;
 };
 
-/** Exported for integration tests that need to stop before a later migration. */
-export const migrations: Migration[] = [
+const migrations: Migration[] = [
   {
     version: "001_init",
     sql: `
@@ -335,18 +334,24 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function runMigrations(client: DbClient): void {
+function ensureSchemaMigrationsTable(client: DbClient): void {
   client.db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version text PRIMARY KEY,
       applied_at text NOT NULL
     );
   `);
+}
 
+function applyPendingMigrations(client: DbClient, stopBefore?: string): void {
+  ensureSchemaMigrationsTable(client);
   const select = client.db.prepare("SELECT version FROM schema_migrations WHERE version = ?");
   const insert = client.db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)");
 
   for (const migration of migrations) {
+    if (stopBefore !== undefined && migration.version === stopBefore) {
+      break;
+    }
     const row = select.get(migration.version) as { version: string } | undefined;
     if (row) {
       continue;
@@ -368,5 +373,24 @@ export function runMigrations(client: DbClient): void {
       }
     }
   }
+}
+
+/**
+ * Apply all pending migrations.
+ *
+ * For migrations that rebuild tables referenced by FKs, also add an upgrade test:
+ * `runMigrationsUntil(db, "<that version>")`, insert parent+child rows, then `runMigrations(db)`.
+ * Empty-DB migrate-to-latest alone will not catch that failure mode.
+ */
+export function runMigrations(client: DbClient): void {
+  applyPendingMigrations(client);
+}
+
+/** Apply migrations strictly before `stopBefore` (that version is not applied). For upgrade tests. */
+export function runMigrationsUntil(client: DbClient, stopBefore: string): void {
+  if (!migrations.some((migration) => migration.version === stopBefore)) {
+    throw new Error(`Unknown migration version: ${stopBefore}`);
+  }
+  applyPendingMigrations(client, stopBefore);
 }
 
