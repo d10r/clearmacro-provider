@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase } from "../../src/db/client.js";
-import { runMigrations } from "../../src/db/migrations.js";
+import { migrations, runMigrations } from "../../src/db/migrations.js";
 import { RelayExecutionEventRepository, RelayExecutionRepository } from "../../src/db/repositories.js";
 
 function makeDb() {
@@ -254,6 +254,82 @@ describe("db migrations and repositories", () => {
     const due = restarted.listAwaitingAuthorizationDue(10);
     expect(due.some((row) => row.id === created.id)).toBe(true);
     expect(restarted.getByIdOrThrow(created.id).authorizationPollAttempts).toBe(2);
+  });
+
+  it("applies migration 003 while child foreign-key rows still reference relay_executions", () => {
+    const db = makeDb();
+    db.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version text PRIMARY KEY,
+        applied_at text NOT NULL
+      );
+    `);
+    const insertVersion = db.db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)",
+    );
+    for (const migration of migrations) {
+      if (migration.version === "003_safe_message_authorization") {
+        break;
+      }
+      db.db.exec("PRAGMA foreign_keys = OFF;");
+      try {
+        db.transaction(() => {
+          db.db.exec(migration.sql);
+          insertVersion.run(migration.version, new Date().toISOString());
+        });
+      } finally {
+        db.db.exec("PRAGMA foreign_keys = ON;");
+      }
+    }
+
+    const now = new Date().toISOString();
+    db.db
+      .prepare(
+        `INSERT INTO relay_executions(
+            id, client_id, client_request_id, request_body_hash, digest, domain, kind, state, terminal,
+            chain_id, oz_relayer_id, oz_transaction_id, forwarder_address, macro_address, signer_address, nonce,
+            valid_after, valid_before, value, payload, signature, permit2_json, metadata_json, force_after_preflight_revert,
+            current_transaction_hash, transaction_hashes_json, receipt_json, required_confirmations, last_error_json,
+            created_at, updated_at, terminal_at
+          ) VALUES (
+            'exec-1', 'anonymous', NULL, 'hash', '0x11', 'test', 'clearMacroV1', 'pending', 0,
+            1, 'relayer', NULL, '0x1', '0x2', '0x3', '1',
+            '0', '0', '0', '0x', '0xsig', NULL, '{}', 0,
+            NULL, '[]', NULL, 1, NULL, ?, ?, NULL
+          )`,
+      )
+      .run(now, now);
+    db.db
+      .prepare(
+        `INSERT INTO relayer_transactions(
+            oz_transaction_id, execution_id, oz_relayer_id, status, status_reason, tx_hash, nonce,
+            gas_limit, gas_price, max_fee_per_gas, max_priority_fee_per_gas, raw_json,
+            submitted_at, included_at, confirmed_at, receipt_json, last_polled_at, created_at, updated_at
+          ) VALUES (
+            'oz-1', 'exec-1', 'relayer', 'pending', NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, '{}',
+            NULL, NULL, NULL, NULL, NULL, ?, ?
+          )`,
+      )
+      .run(now, now);
+    db.db
+      .prepare(
+        `INSERT INTO relay_execution_events(
+            id, execution_id, type, actor, reason, details_json, created_at
+          ) VALUES ('evt-1', 'exec-1', 'state_changed', 'api', 'created', '{}', ?)`,
+      )
+      .run(now);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    const executions = new RelayExecutionRepository(db);
+    const row = executions.getByIdOrThrow("exec-1");
+    expect(row.signature).toBe("0xsig");
+    expect(row.authorizationType).toBeNull();
+    expect(
+      db.db.prepare("SELECT COUNT(*) AS c FROM relayer_transactions WHERE execution_id = 'exec-1'").get() as {
+        c: number;
+      },
+    ).toEqual({ c: 1 });
   });
 
   it("applies migration 003 authorization columns", () => {

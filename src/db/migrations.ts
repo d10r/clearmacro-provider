@@ -5,7 +5,8 @@ type Migration = {
   sql: string;
 };
 
-const migrations: Migration[] = [
+/** Exported for integration tests that need to stop before a later migration. */
+export const migrations: Migration[] = [
   {
     version: "001_init",
     sql: `
@@ -350,10 +351,22 @@ export function runMigrations(client: DbClient): void {
     if (row) {
       continue;
     }
-    client.transaction(() => {
-      client.db.exec(migration.sql);
-      insert.run(migration.version, nowIso());
-    });
+    // SQLite ignores PRAGMA foreign_keys changes inside a transaction. Migrations that
+    // rebuild parent tables while children still reference them must disable FKs first.
+    const disablesForeignKeys = /\bPRAGMA\s+foreign_keys\s*=\s*OFF\b/i.test(migration.sql);
+    if (disablesForeignKeys) {
+      client.db.exec("PRAGMA foreign_keys = OFF;");
+    }
+    try {
+      client.transaction(() => {
+        client.db.exec(migration.sql);
+        insert.run(migration.version, nowIso());
+      });
+    } finally {
+      if (disablesForeignKeys) {
+        client.db.exec("PRAGMA foreign_keys = ON;");
+      }
+    }
   }
 }
 
