@@ -97,6 +97,17 @@ Every configured chain uses an explicit `macroPolicy`:
 
 Open mode still validates chain config, resolved forwarder, request/payload macro consistency, provider name, digest, signature, readiness, and preflight. Empty `allowedMacros` must not mean open mode.
 
+## Client Cancel
+
+`DELETE /v1/relay-executions/:id` is a client abandon path for long-lived Safe intents (and unused pre-submit `pending` rows):
+
+- Allowed when `state = awaiting_authorization`, or `state = pending` with no OpenZeppelin transaction id yet.
+- Not allowed once the relayer has accepted the intent (`oz_transaction_id` set / `submitted`), or once the worker has claimed the row for submission (`oz_transaction_id` starts with `claim:`). Those transitions can still become `canceled` only via OpenZeppelin Relayer status mapping.
+- Cancel uses a conditional update (`terminal = 0`, `oz_transaction_id IS NULL`, cancelable state) so it cannot win a race against submission claim.
+- Idempotent: already `canceled` returns 200 with the existing resource.
+- With API auth enabled, only the creating `client_id` may cancel (other clients get 404, same visibility rule as create dedup).
+- Cancel does not revoke a Safe message on the Transaction Service; it only stops this provider from relaying. Dapps that cancel should still avoid treating a later co-signer confirmation as provider-owned execution.
+
 ## Worker Ownership
 
 The worker owns post-creation progress:

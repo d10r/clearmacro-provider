@@ -2,6 +2,9 @@ import { randomUUID, createHash } from "node:crypto";
 import type { DbClient } from "./client.js";
 import { assertTransitionState, isTerminalState, type RelayExecutionState } from "../tx/lifecycle.js";
 
+/** Internal placeholder while an OZ submit is in flight; not a real relayer id. */
+export const SUBMISSION_CLAIM_PREFIX = "claim:";
+
 export type RelayExecutionError = {
   code: string;
   message: string;
@@ -372,10 +375,71 @@ export class RelayExecutionRepository {
   listPollable(limit: number): RelayExecutionRow[] {
     const rows = this.client.db
       .prepare(
-        "SELECT * FROM relay_executions WHERE terminal = 0 AND oz_transaction_id IS NOT NULL AND state IN ('pending','submitted') ORDER BY updated_at ASC LIMIT ?",
+        `SELECT * FROM relay_executions
+         WHERE terminal = 0
+           AND oz_transaction_id IS NOT NULL
+           AND oz_transaction_id NOT LIKE ?
+           AND state IN ('pending','submitted')
+         ORDER BY updated_at ASC LIMIT ?`,
       )
-      .all(limit) as Record<string, unknown>[];
+      .all(`${SUBMISSION_CLAIM_PREFIX}%`, limit) as Record<string, unknown>[];
     return rows.map(mapRelayExecution);
+  }
+
+  /**
+   * Atomically cancel a pre-submit execution. Returns null when another actor
+   * already claimed submission or terminalized the row.
+   */
+  tryClientCancel(executionId: string, errorJson: string): RelayExecutionRow | null {
+    return this.client.transaction(() => {
+      const timestamp = nowIso();
+      const result = this.client.db
+        .prepare(
+          `UPDATE relay_executions
+           SET state = 'canceled', terminal = 1, updated_at = ?, terminal_at = COALESCE(terminal_at, ?),
+               last_error_json = COALESCE(?, last_error_json)
+           WHERE id = ?
+             AND terminal = 0
+             AND oz_transaction_id IS NULL
+             AND state IN ('awaiting_authorization', 'pending')`,
+        )
+        .run(timestamp, timestamp, errorJson, executionId);
+      if (result.changes === 0) {
+        return null;
+      }
+      return this.getByIdOrThrow(executionId);
+    });
+  }
+
+  /** Claim a pending row immediately before OZ submit so DELETE cannot race it. */
+  claimForSubmission(executionId: string): boolean {
+    const timestamp = nowIso();
+    const claimId = `${SUBMISSION_CLAIM_PREFIX}${randomUUID()}`;
+    const result = this.client.db
+      .prepare(
+        `UPDATE relay_executions
+         SET oz_transaction_id = ?, updated_at = ?
+         WHERE id = ?
+           AND terminal = 0
+           AND state = 'pending'
+           AND oz_transaction_id IS NULL`,
+      )
+      .run(claimId, timestamp, executionId);
+    return result.changes === 1;
+  }
+
+  releaseSubmissionClaim(executionId: string): void {
+    const timestamp = nowIso();
+    this.client.db
+      .prepare(
+        `UPDATE relay_executions
+         SET oz_transaction_id = NULL, updated_at = ?
+         WHERE id = ?
+           AND terminal = 0
+           AND state = 'pending'
+           AND oz_transaction_id LIKE ?`,
+      )
+      .run(timestamp, executionId, `${SUBMISSION_CLAIM_PREFIX}%`);
   }
 
   transitionState(executionId: string, toState: RelayExecutionState, options?: { errorJson?: string; ozTransactionId?: string }): RelayExecutionRow {
@@ -448,6 +512,9 @@ export class RelayExecutionRepository {
   applySubmitAcknowledgement(executionId: string, ozTransactionId: string, hash: `0x${string}` | null): RelayExecutionRow {
     return this.client.transaction(() => {
       const row = this.getByIdOrThrow(executionId);
+      if (row.terminal === 1) {
+        throw new Error(`Cannot acknowledge submit for terminal execution: ${executionId}`);
+      }
       const timestamp = nowIso();
       if (hash) {
         const hashes = JSON.parse(row.transactionHashesJson) as `0x${string}`[];
@@ -456,18 +523,20 @@ export class RelayExecutionRepository {
           .prepare(
             `UPDATE relay_executions
              SET oz_transaction_id = ?, current_transaction_hash = ?, transaction_hashes_json = ?, updated_at = ?
-             WHERE id = ?`,
+             WHERE id = ? AND terminal = 0`,
           )
           .run(ozTransactionId, hash, JSON.stringify(hashes), timestamp, executionId);
         const updated = this.getByIdOrThrow(executionId);
         if (updated.state === "pending") {
           assertTransitionState("pending", "submitted");
           this.client.db
-            .prepare(`UPDATE relay_executions SET state = 'submitted', updated_at = ? WHERE id = ?`)
+            .prepare(`UPDATE relay_executions SET state = 'submitted', updated_at = ? WHERE id = ? AND terminal = 0`)
             .run(timestamp, executionId);
         }
       } else {
-        this.client.db.prepare(`UPDATE relay_executions SET oz_transaction_id = ?, updated_at = ? WHERE id = ?`).run(ozTransactionId, timestamp, executionId);
+        this.client.db
+          .prepare(`UPDATE relay_executions SET oz_transaction_id = ?, updated_at = ? WHERE id = ? AND terminal = 0`)
+          .run(ozTransactionId, timestamp, executionId);
       }
       return this.getByIdOrThrow(executionId);
     });

@@ -946,4 +946,119 @@ describe("API integration", () => {
     expect(body.error.code).toBe("VALIDATION_ERROR");
     expect(body.error.message).toContain("forceExecuteAfterPreflightRevert");
   });
+
+  it("cancels awaiting_authorization and is idempotent", async () => {
+    const { app } = await createTestHarness({
+      safeAuthorizationEnabled: true,
+      safeClient: {
+        isChainSupported: () => true,
+        assertEoaOwners: async () => {},
+        getMessage: async () => ({
+          safe: "0x00000000000000000000000000000000000000bb",
+          messageHash: `0x${"aa".repeat(32)}`,
+          preparedSignature: null,
+          messageDigest: `0x${"11".repeat(32)}`,
+        }),
+      },
+      getSignerBytecode: async () => "0x1234",
+    });
+    const base = await buildRelayPayload({
+      signerAddress: "0x00000000000000000000000000000000000000bb",
+    });
+    const { signature: _signature, ...withoutSignature } = base;
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: {
+        ...withoutSignature,
+        authorization: {
+          type: "safeMessageV1" as const,
+          safeMessageHash: `0x${"aa".repeat(32)}`,
+        },
+      },
+    });
+    expect(created.statusCode).toBe(202);
+    const id = created.json<{ id: string }>().id;
+
+    const canceled = await app.inject({ method: "DELETE", url: `/v1/relay-executions/${id}` });
+    expect(canceled.statusCode).toBe(200);
+    const body = canceled.json<{
+      state: string;
+      terminal: boolean;
+      error?: { code: string };
+    }>();
+    expect(body.state).toBe("canceled");
+    expect(body.terminal).toBe(true);
+    expect(body.error?.code).toBe("CANCELED_BY_CLIENT");
+
+    const again = await app.inject({ method: "DELETE", url: `/v1/relay-executions/${id}` });
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ state: string }>().state).toBe("canceled");
+  });
+
+  it("cancels pre-submit pending executions", async () => {
+    const { app } = await createTestHarness();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload(),
+    });
+    expect(created.statusCode).toBe(202);
+    const id = created.json<{ id: string }>().id;
+
+    const canceled = await app.inject({ method: "DELETE", url: `/v1/relay-executions/${id}` });
+    expect(canceled.statusCode).toBe(200);
+    expect(canceled.json<{ state: string }>().state).toBe("canceled");
+  });
+
+  it("rejects cancel after relayer submission acknowledgement", async () => {
+    const { app, executions } = await createTestHarness();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload(),
+    });
+    const id = created.json<{ id: string }>().id;
+    executions.updateMetadata(id, { ozTransactionId: "oz-tx-1" });
+
+    const response = await app.inject({ method: "DELETE", url: `/v1/relay-executions/${id}` });
+    expect(response.statusCode).toBe(409);
+    expect(response.json<{ error: { code: string } }>().error.code).toBe("EXECUTION_NOT_CANCELABLE");
+  });
+
+  it("hides cancel of another client's execution when auth is enabled", async () => {
+    const tokA = "token-cancel-a";
+    const tokB = "token-cancel-b";
+    const { app } = await createTestHarness({
+      env: {
+        apiAuthEnabled: true,
+        apiClients: [
+          { id: "client-a", apiTokenHash: createHash("sha256").update(tokA).digest("hex").toLowerCase() },
+          { id: "client-b", apiTokenHash: createHash("sha256").update(tokB).digest("hex").toLowerCase() },
+        ],
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/relay-executions",
+      payload: await buildRelayPayload(),
+      headers: bearer(tokA),
+    });
+    const id = created.json<{ id: string }>().id;
+
+    const hidden = await app.inject({
+      method: "DELETE",
+      url: `/v1/relay-executions/${id}`,
+      headers: bearer(tokB),
+    });
+    expect(hidden.statusCode).toBe(404);
+
+    const owned = await app.inject({
+      method: "DELETE",
+      url: `/v1/relay-executions/${id}`,
+      headers: bearer(tokA),
+    });
+    expect(owned.statusCode).toBe(200);
+    expect(owned.json<{ state: string }>().state).toBe("canceled");
+  });
 });

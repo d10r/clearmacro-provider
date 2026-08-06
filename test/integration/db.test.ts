@@ -273,6 +273,35 @@ describe("db migrations and repositories", () => {
     expect(restarted.getByIdOrThrow(created.id).authorizationPollAttempts).toBe(2);
   });
 
+  it("coordinates client cancel with submission claim", () => {
+    const db = makeDb();
+    runMigrations(db);
+    const executions = new RelayExecutionRepository(db);
+    const pending = executions.createPending({
+      ...basePending(),
+      digest: "0x" + "a1".repeat(32),
+    });
+
+    expect(executions.claimForSubmission(pending.id)).toBe(true);
+    expect(
+      executions.tryClientCancel(
+        pending.id,
+        JSON.stringify({ code: "CANCELED_BY_CLIENT", message: "x", category: "user", retryable: false }),
+      ),
+    ).toBeNull();
+    expect(executions.getByIdOrThrow(pending.id).state).toBe("pending");
+    expect(executions.getByIdOrThrow(pending.id).ozTransactionId?.startsWith("claim:")).toBe(true);
+    expect(executions.listPollable(10).some((row) => row.id === pending.id)).toBe(false);
+
+    executions.releaseSubmissionClaim(pending.id);
+    const canceled = executions.tryClientCancel(
+      pending.id,
+      JSON.stringify({ code: "CANCELED_BY_CLIENT", message: "x", category: "user", retryable: false }),
+    );
+    expect(canceled?.state).toBe("canceled");
+    expect(executions.claimForSubmission(pending.id)).toBe(false);
+  });
+
   it("applies migration 003 while child foreign-key rows still reference relay_executions", () => {
     const db = makeDb();
     runMigrationsUntil(db, "003_safe_message_authorization");

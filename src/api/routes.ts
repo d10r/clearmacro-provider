@@ -18,12 +18,30 @@ import {
   finalizeCreatedExecution,
   type CreateRelayExecutionBody,
 } from "./admitRelayExecution.js";
+import { cancelRelayExecution } from "./cancelRelayExecution.js";
 import { buildSafeMessageLink } from "../safe/config.js";
 
 export type { RegisterRoutesDeps } from "./deps.js";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function resolveRequestClientId(
+  deps: RegisterRoutesDeps,
+  authorizationHeader: string | undefined,
+): string {
+  if (!deps.apiAuthEnabled) {
+    return "anonymous";
+  }
+  if (!authorizationHeader?.startsWith("Bearer ")) {
+    throw new ApiError(401, "UNAUTHORIZED", "Missing bearer token.", "auth", false);
+  }
+  const resolved = deps.resolveClientIdFromBearer(authorizationHeader.slice("Bearer ".length));
+  if (!resolved) {
+    throw new ApiError(401, "UNAUTHORIZED", "Invalid API token.", "auth", false);
+  }
+  return resolved;
 }
 
 function assertKindExclusiveRelayFields(body: Record<string, unknown>): void {
@@ -340,33 +358,7 @@ export async function registerRoutes(
     async (request, reply) => {
       assertKindExclusiveRelayFields(request.body as Record<string, unknown>);
       const body = request.body as CreateRelayExecutionBody;
-
-      const clientId = deps.apiAuthEnabled
-        ? (() => {
-            const authHeader = request.headers.authorization;
-            if (!authHeader?.startsWith("Bearer ")) {
-              throw new ApiError(
-                401,
-                "UNAUTHORIZED",
-                "Missing bearer token.",
-                "auth",
-                false,
-              );
-            }
-            const token = authHeader.slice("Bearer ".length);
-            const resolved = deps.resolveClientIdFromBearer(token);
-            if (!resolved) {
-              throw new ApiError(
-                401,
-                "UNAUTHORIZED",
-                "Invalid API token.",
-                "auth",
-                false,
-              );
-            }
-            return resolved;
-          })()
-        : "anonymous";
+      const clientId = resolveRequestClientId(deps, request.headers.authorization);
 
       const result = await admitRelayExecution(deps, body, clientId);
       if ("error" in result) {
@@ -447,6 +439,62 @@ export async function registerRoutes(
         ...response,
         events: deps.executionEvents.listByExecution(id),
       };
+    },
+  );
+
+  app.delete(
+    "/v1/relay-executions/:id",
+    {
+      schema: {
+        tags: ["Relay Executions"],
+        summary: "Cancel a relay execution",
+        description:
+          "Cancels an execution that is still `awaiting_authorization`, or `pending` before OpenZeppelin Relayer submission. Idempotent when already `canceled`. Does not cancel in-flight relayer transactions (`submitted` / pending with a relayer id). When API auth is enabled, only the creating client may cancel.",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: {
+              type: "string",
+              description: "Provider execution ID returned by create.",
+            },
+          },
+        },
+        response: {
+          200: {
+            ...RelayExecutionResponseSchema,
+            description: "Execution canceled (or already canceled).",
+          },
+          401: {
+            ...ErrorBodySchema,
+            description:
+              "Missing or invalid bearer token when API authentication is enabled.",
+          },
+          404: {
+            ...ErrorBodySchema,
+            description: "No execution exists for the requested ID (or not visible to this client).",
+          },
+          409: {
+            ...ErrorBodySchema,
+            description: "Execution is no longer cancelable.",
+          },
+        },
+      },
+    },
+    async (request) => {
+      const id = (request.params as { id: string }).id;
+      const clientId = resolveRequestClientId(deps, request.headers.authorization);
+      const row = cancelRelayExecution(deps, {
+        executionId: id,
+        clientId,
+        apiAuthEnabled: deps.apiAuthEnabled,
+      });
+      return toRelayExecutionResponse(
+        row,
+        deps.relayerTransactions.getByExecutionId(row.id),
+        deps,
+      );
     },
   );
 

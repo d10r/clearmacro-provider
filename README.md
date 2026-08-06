@@ -18,14 +18,15 @@ TypeScript service that accepts signed **ClearMacro relay executions**, validate
 
 Swagger at `/docs` is the API reference for request/response shapes, status codes, field descriptions, and examples.
 
-| Method | Path                       | Purpose                                                            |
-| ------ | -------------------------- | ------------------------------------------------------------------ |
-| `GET`  | `/healthz`                 | Liveness                                                           |
-| `GET`  | `/readyz`                  | Readiness (per-chain: RPC, relayer, signer balance)                |
-| `GET`  | `/metrics`                 | Prometheus metrics                                                 |
-| `GET`  | `/v1/capabilities`         | Global `providerName` + per-chain `forwarderAddress` + `macroPolicy` |
-| `POST` | `/v1/relay-executions`     | Create execution (sync validate + preflight; worker submits later) |
-| `GET`  | `/v1/relay-executions/:id` | Execution resource; `?include=events` for lifecycle events         |
+| Method   | Path                       | Purpose                                                            |
+| -------- | -------------------------- | ------------------------------------------------------------------ |
+| `GET`    | `/healthz`                 | Liveness                                                           |
+| `GET`    | `/readyz`                  | Readiness (per-chain: RPC, relayer, signer balance)                |
+| `GET`    | `/metrics`                 | Prometheus metrics                                                 |
+| `GET`    | `/v1/capabilities`         | Global `providerName` + per-chain `forwarderAddress` + `macroPolicy` |
+| `POST`   | `/v1/relay-executions`     | Create execution (sync validate + preflight; worker submits later) |
+| `GET`    | `/v1/relay-executions/:id` | Execution resource; `?include=events` for lifecycle events         |
+| `DELETE` | `/v1/relay-executions/:id` | Cancel before relayer submission (`awaiting_authorization` / pre-submit `pending`) |
 
 ### Dapp flow (typical)
 
@@ -54,6 +55,7 @@ When `SAFE_API_KEY` is set, `clearMacroV1` may use Safe off-chain message signin
 
 - Request: exactly one of `signature` **or** `authorization: { type: "safeMessageV1", safeMessageHash }` (mutually exclusive).
 - Response starts in `awaiting_authorization` until a background authorization worker sees ERC-1271 validation of the ClearMacro digest (prepared Safe signature and/or on-chain-approved empty signature), then promotes to `pending` for normal relayer submission.
+- `DELETE /v1/relay-executions/:id` cancels an `awaiting_authorization` (or pre-submit `pending`) execution so the dapp can abandon a long-lived Safe intent; idempotent if already `canceled`.
 - `GET /v1/capabilities` includes per-chain `supportedAuthorizationMethods` (always `signature`; also `safeMessageV1` when Safe auth is enabled and the chain is supported by the Safe Transaction Service).
 - Not supported with `clearMacroPermit2V1`, and not compatible with `forceExecuteAfterPreflightRevert`.
 - Env: `SAFE_API_KEY` (enables the feature), optional `SAFE_AUTHORIZATION_ENABLED` kill switch, poll/retry knobs, optional `SAFE_TX_SERVICE_URL` — see `.env.example`.

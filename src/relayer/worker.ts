@@ -395,15 +395,27 @@ export async function processRelayerWorkerTick(
         });
       }
 
-      const tx = await deps.relayerClient.submitTransaction(
-        execution.ozRelayerId,
-        {
-          to: execution.forwarderAddress,
-          value: execution.value,
-          data: txData,
-          speed: "fast",
-        },
-      );
+      // Claim before the async OZ call so DELETE cannot cancel mid-submit.
+      if (!deps.executions.claimForSubmission(execution.id)) {
+        continue;
+      }
+
+      let tx;
+      try {
+        tx = await deps.relayerClient.submitTransaction(
+          execution.ozRelayerId,
+          {
+            to: execution.forwarderAddress,
+            value: execution.value,
+            data: txData,
+            speed: "fast",
+          },
+        );
+      } catch (error) {
+        deps.executions.releaseSubmissionClaim(execution.id);
+        throw error;
+      }
+
       deps.relayerTransactions.upsert({
         ozTransactionId: tx.id,
         executionId: execution.id,
