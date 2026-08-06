@@ -20,6 +20,12 @@ import {
 } from "./admitRelayExecution.js";
 import { cancelRelayExecution } from "./cancelRelayExecution.js";
 import { buildSafeMessageLink } from "../safe/config.js";
+import {
+  mapRequestResultFromApiError,
+  recordRequestOutcome,
+  recordValidationFailureIfApplicable,
+  type RequestResult,
+} from "../metrics/requestOutcomes.js";
 
 export type { RegisterRoutesDeps } from "./deps.js";
 
@@ -356,22 +362,62 @@ export async function registerRoutes(
       },
     },
     async (request, reply) => {
-      assertKindExclusiveRelayFields(request.body as Record<string, unknown>);
       const body = request.body as CreateRelayExecutionBody;
-      const clientId = resolveRequestClientId(deps, request.headers.authorization);
+      const chainIdLabel = String(body.chainId ?? "unknown");
+      const kindLabel = body.kind ?? "unknown";
+      let requestRecorded = false;
 
-      const result = await admitRelayExecution(deps, body, clientId);
-      if ("error" in result) {
-        throw result.error;
+      const recordRequestOnce = (result: RequestResult): void => {
+        if (requestRecorded) {
+          return;
+        }
+        requestRecorded = true;
+        recordRequestOutcome(deps.metrics, {
+          chainId: chainIdLabel,
+          kind: kindLabel,
+          result,
+        });
+      };
+
+      try {
+        // Keep inside try so exclusive-field validation is counted like other client rejects.
+        assertKindExclusiveRelayFields(request.body as Record<string, unknown>);
+        const clientId = resolveRequestClientId(deps, request.headers.authorization);
+
+        const result = await admitRelayExecution(deps, body, clientId);
+        if ("error" in result) {
+          recordRequestOnce(mapRequestResultFromApiError(result.error));
+          recordValidationFailureIfApplicable(deps.metrics, {
+            chainId: chainIdLabel,
+            code: result.error.code,
+          });
+          throw result.error;
+        }
+
+        const row = finalizeCreatedExecution(deps, result.row);
+        const response = toRelayExecutionResponse(
+          row,
+          deps.relayerTransactions.getByExecutionId(row.id),
+          deps,
+        );
+        // Record success only after response construction so a late throw maps to `error`.
+        recordRequestOnce(result.statusCode === 200 ? "duplicate" : "created");
+        reply.code(result.statusCode);
+        return response;
+      } catch (error) {
+        if (!requestRecorded) {
+          if (error instanceof ApiError) {
+            recordRequestOnce(mapRequestResultFromApiError(error));
+            recordValidationFailureIfApplicable(deps.metrics, {
+              chainId: chainIdLabel,
+              code: error.code,
+            });
+          } else {
+            recordRequestOnce("error");
+          }
+        }
+        throw error;
       }
-
-      const row = finalizeCreatedExecution(deps, result.row);
-      reply.code(result.statusCode);
-      return toRelayExecutionResponse(
-        row,
-        deps.relayerTransactions.getByExecutionId(row.id),
-        deps,
-      );
     },
   );
 

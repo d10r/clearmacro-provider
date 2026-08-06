@@ -20,6 +20,13 @@ import type { OzTransaction } from "./client.js";
 import { parseStoredPermit2Json, type Permit2Context } from "../chain/permit2.js";
 import type { RelayExecutionReceipt } from "../db/repositories.js";
 import { normalizeOzReceipt, type RawOzReceipt } from "./receiptNormalize.js";
+import {
+  recordActionableFailure,
+  recordOperationalRetry,
+  type ActionableFailureMetrics,
+  type OperationalRetryMetrics,
+} from "../metrics/actionableFailures.js";
+import type { AppMetrics } from "../metrics/metrics.js";
 
 export type RelayerWorkerDeps = {
   executions: RelayExecutionRepository;
@@ -43,11 +50,15 @@ export type RelayerWorkerDeps = {
     input: Parameters<typeof preflightRunPermit2AndMacro>[0],
   ) => Promise<"ok" | "deterministic_revert" | "rpc_unavailable">;
   resolvePermit2Context?: typeof resolvePermit2Context;
+  metrics?: ActionableFailureMetrics &
+    OperationalRetryMetrics &
+    Pick<AppMetrics, "relayerSubmissionCounter" | "relayerPollLatency">;
 };
 
 function failPermit2State(
   deps: RelayerWorkerDeps,
   executionId: string,
+  chainId: number,
   message: string,
 ): void {
   deps.executions.transitionState(executionId, "failed", {
@@ -58,6 +69,11 @@ function failPermit2State(
       retryable: false,
     }),
   });
+  recordActionableFailure(deps.metrics, {
+    chainId,
+    stage: "worker_submit",
+    code: "INVALID_PERMIT2_STATE",
+  });
 }
 
 /**
@@ -66,7 +82,7 @@ function failPermit2State(
  */
 function requireClearMacroSignature(
   deps: RelayerWorkerDeps,
-  execution: { id: string; signature: string | null },
+  execution: { id: string; chainId: number; signature: string | null },
 ): string | null {
   if (execution.signature) {
     return execution.signature;
@@ -79,6 +95,11 @@ function requireClearMacroSignature(
       category: "provider",
       retryable: false,
     }),
+  });
+  recordActionableFailure(deps.metrics, {
+    chainId: execution.chainId,
+    stage: "worker_submit",
+    code: "INTERNAL_INVARIANT",
   });
   deps.executionEvents.append({
     executionId: execution.id,
@@ -94,6 +115,7 @@ async function loadPermit2Context(
   deps: RelayerWorkerDeps,
   execution: {
     id: string;
+    chainId: number;
     permit2Json: string | null;
     forwarderAddress: string;
     macroAddress: string;
@@ -106,6 +128,7 @@ async function loadPermit2Context(
     failPermit2State(
       deps,
       execution.id,
+      execution.chainId,
       "Permit2 execution is missing permit2_json.",
     );
     return "failed";
@@ -117,6 +140,7 @@ async function loadPermit2Context(
     failPermit2State(
       deps,
       execution.id,
+      execution.chainId,
       "Permit2 execution has malformed permit2_json.",
     );
     return "failed";
@@ -138,6 +162,11 @@ async function loadPermit2Context(
       actor: "worker",
       reason: "Permit2 witness derivation RPC unavailable; will retry",
       detailsJson: JSON.stringify({ retry: true }),
+    });
+    recordOperationalRetry(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "worker_preflight",
+      reason: "preflight_rpc_unavailable",
     });
     return "retry";
   }
@@ -242,6 +271,7 @@ type PreflightResult = Awaited<ReturnType<typeof preflightRunMacro>>;
 function applyPreflightResult(
   deps: RelayerWorkerDeps,
   executionId: string,
+  chainId: number,
   preflight: PreflightResult,
 ): "ok" | "continue" {
   if (preflight === "deterministic_revert") {
@@ -271,6 +301,11 @@ function applyPreflightResult(
       reason: "Preflight RPC unavailable; will retry",
       detailsJson: JSON.stringify({ retry: true }),
     });
+    recordOperationalRetry(deps.metrics, {
+      chainId,
+      stage: "worker_preflight",
+      reason: "preflight_rpc_unavailable",
+    });
     return "continue";
   }
   return "ok";
@@ -292,6 +327,11 @@ export async function processRelayerWorkerTick(
             category: "provider",
             retryable: false,
           }),
+        });
+        recordActionableFailure(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_submit",
+          code: "CHAIN_NOT_ALLOWED",
         });
         continue;
       }
@@ -319,7 +359,7 @@ export async function processRelayerWorkerTick(
             msgValue: execution.value,
           });
           if (
-            applyPreflightResult(deps, execution.id, preflight) === "continue"
+            applyPreflightResult(deps, execution.id, execution.chainId, preflight) === "continue"
           ) {
             continue;
           }
@@ -340,7 +380,7 @@ export async function processRelayerWorkerTick(
             msgValue: execution.value,
           });
           if (
-            applyPreflightResult(deps, execution.id, preflight) === "continue"
+            applyPreflightResult(deps, execution.id, execution.chainId, preflight) === "continue"
           ) {
             continue;
           }
@@ -400,94 +440,177 @@ export async function processRelayerWorkerTick(
         continue;
       }
 
+      // Only OZ submit failures use RELAYER_SUBMIT_FAILED / submission outcome counters.
+      // Pre-submit and post-accept persistence errors must not look like "relayer rejected".
       let tx;
       try {
-        tx = await deps.relayerClient.submitTransaction(
-          execution.ozRelayerId,
-          {
-            to: execution.forwarderAddress,
-            value: execution.value,
-            data: txData,
-            speed: "fast",
-          },
-        );
+        tx = await deps.relayerClient.submitTransaction(execution.ozRelayerId, {
+          to: execution.forwarderAddress,
+          value: execution.value,
+          data: txData,
+          speed: "fast",
+        });
       } catch (error) {
         deps.executions.releaseSubmissionClaim(execution.id);
-        throw error;
-      }
-
-      deps.relayerTransactions.upsert({
-        ozTransactionId: tx.id,
-        executionId: execution.id,
-        ozRelayerId: execution.ozRelayerId,
-        status: tx.status,
-        statusReason: tx.status_reason,
-        txHash: tx.hash,
-        nonce: tx.nonce === null ? null : String(tx.nonce),
-        gasLimit: tx.gas_limit === null ? null : String(tx.gas_limit),
-        gasPrice: tx.gas_price,
-        maxFeePerGas: tx.max_fee_per_gas,
-        maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
-        rawJson: JSON.stringify(tx),
-        submittedAt: tx.sent_at,
-        includedAt: tx.mined_at ?? null,
-        confirmedAt: tx.confirmed_at,
-        receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
-        lastPolledAt: new Date().toISOString(),
-      });
-      deps.executions.applySubmitAcknowledgement(
-        execution.id,
-        tx.id,
-        tx.hash ? (tx.hash as `0x${string}`) : null,
-      );
-      deps.executionEvents.append({
-        executionId: execution.id,
-        type: "relayer_submit_accepted",
-        actor: "worker",
-        reason: "Relayer accepted transaction intent",
-        detailsJson: JSON.stringify({
-          ozTransactionId: tx.id,
-          status: tx.status,
-        }),
-      });
-    } catch (error) {
-      const currentAttempts = getSubmitAttemptsFromErrorJson(
-        execution.lastErrorJson,
-      );
-      const nextAttempts = currentAttempts + 1;
-      const errorPayload = JSON.stringify({
-        code: "RELAYER_SUBMIT_ERROR",
-        message: error instanceof Error ? error.message : "unknown",
-        submitAttempts: nextAttempts,
-      });
-      const transient = isTransientSubmitError(error);
-      if (transient && nextAttempts < submitRetryCount) {
-        deps.executions.updateLastError(execution.id, errorPayload);
+        const currentAttempts = getSubmitAttemptsFromErrorJson(execution.lastErrorJson);
+        const nextAttempts = currentAttempts + 1;
+        const errorPayload = JSON.stringify({
+          code: "RELAYER_SUBMIT_ERROR",
+          message: error instanceof Error ? error.message : "unknown",
+          submitAttempts: nextAttempts,
+        });
+        const transient = isTransientSubmitError(error);
+        if (transient && nextAttempts < submitRetryCount) {
+          deps.metrics?.relayerSubmissionCounter?.inc({
+            chain_id: String(execution.chainId),
+            outcome: "retry",
+          });
+          deps.executions.updateLastError(execution.id, errorPayload);
+          deps.executionEvents.append({
+            executionId: execution.id,
+            type: "relayer_submit_retry_scheduled",
+            actor: "worker",
+            reason: "Transient relayer submission failure",
+            detailsJson: JSON.stringify({
+              submitAttempts: nextAttempts,
+              retryLimit: submitRetryCount,
+            }),
+          });
+          continue;
+        }
+        deps.metrics?.relayerSubmissionCounter?.inc({
+          chain_id: String(execution.chainId),
+          outcome: "failed",
+        });
+        deps.executions.transitionState(execution.id, "failed", {
+          errorJson: JSON.stringify({
+            code: "RELAYER_SUBMIT_FAILED",
+            message: "Relayer did not accept transaction intent after retries.",
+            category: "relayer",
+            retryable: false,
+          }),
+        });
+        recordActionableFailure(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_submit",
+          code: "RELAYER_SUBMIT_FAILED",
+        });
         deps.executionEvents.append({
           executionId: execution.id,
-          type: "relayer_submit_retry_scheduled",
+          type: "terminal_error_set",
           actor: "worker",
-          reason: "Transient relayer submission failure",
+          reason: "Relayer submission failed",
           detailsJson: JSON.stringify({
-            submitAttempts: nextAttempts,
-            retryLimit: submitRetryCount,
+            message: error instanceof Error ? error.message : "unknown",
           }),
+        });
+        continue;
+      }
+
+      // Persist OZ id first so a later secondary-write failure cannot leave the row
+      // submittable (which would resubmit an already-accepted intent).
+      try {
+        deps.executions.applySubmitAcknowledgement(
+          execution.id,
+          tx.id,
+          tx.hash ? (tx.hash as `0x${string}`) : null,
+        );
+      } catch {
+        recordActionableFailure(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_submit",
+          code: "INTERNAL_INVARIANT",
+        });
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: "terminal_error_set",
+          actor: "worker",
+          reason: "Failed to persist OZ transaction id after acceptance",
+          detailsJson: JSON.stringify({ ozTransactionId: tx.id }),
+        });
+        continue;
+      }
+
+      deps.metrics?.relayerSubmissionCounter?.inc({
+        chain_id: String(execution.chainId),
+        outcome: "accepted",
+      });
+
+      try {
+        deps.relayerTransactions.upsert({
+          ozTransactionId: tx.id,
+          executionId: execution.id,
+          ozRelayerId: execution.ozRelayerId,
+          status: tx.status,
+          statusReason: tx.status_reason,
+          txHash: tx.hash,
+          nonce: tx.nonce === null ? null : String(tx.nonce),
+          gasLimit: tx.gas_limit === null ? null : String(tx.gas_limit),
+          gasPrice: tx.gas_price,
+          maxFeePerGas: tx.max_fee_per_gas,
+          maxPriorityFeePerGas: tx.max_priority_fee_per_gas,
+          rawJson: JSON.stringify(tx),
+          submittedAt: tx.sent_at,
+          includedAt: tx.mined_at ?? null,
+          confirmedAt: tx.confirmed_at,
+          receiptJson: tx.receipt ? JSON.stringify(tx.receipt) : null,
+          lastPolledAt: new Date().toISOString(),
+        });
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: "relayer_submit_accepted",
+          actor: "worker",
+          reason: "Relayer accepted transaction intent",
+          detailsJson: JSON.stringify({
+            ozTransactionId: tx.id,
+            status: tx.status,
+          }),
+        });
+      } catch {
+        // OZ id is durable on the execution; poll path / recovery can proceed.
+        // Do not resubmit; page once as invariant.
+        recordActionableFailure(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_submit",
+          code: "INTERNAL_INVARIANT",
+        });
+        deps.executionEvents.append({
+          executionId: execution.id,
+          type: "terminal_error_set",
+          actor: "worker",
+          reason: "Failed to persist relayer transaction row after OZ acceptance",
+          detailsJson: JSON.stringify({ ozTransactionId: tx.id }),
+        });
+        continue;
+      }
+    } catch (error) {
+      // Pre-submit unexpected failures (relayer lookup/calldata) — not a submit reject.
+      if (isTransientSubmitError(error)) {
+        recordOperationalRetry(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_preflight",
+          reason: "relayer_unavailable",
         });
         continue;
       }
       deps.executions.transitionState(execution.id, "failed", {
         errorJson: JSON.stringify({
-          code: "RELAYER_SUBMIT_FAILED",
-          message: "Relayer did not accept transaction intent after retries.",
-          category: "relayer",
+          code: "INTERNAL_INVARIANT",
+          message: "Unexpected error before relayer submission.",
+          category: "provider",
           retryable: false,
         }),
+      });
+      recordActionableFailure(deps.metrics, {
+        chainId: execution.chainId,
+        stage: "worker_submit",
+        code: "INTERNAL_INVARIANT",
       });
       deps.executionEvents.append({
         executionId: execution.id,
         type: "terminal_error_set",
         actor: "worker",
-        reason: "Relayer submission failed",
+        reason: "Unexpected error before relayer submission",
         detailsJson: JSON.stringify({
           message: error instanceof Error ? error.message : "unknown",
         }),
@@ -506,6 +629,7 @@ export async function processRelayerWorkerTick(
         continue;
       }
       const chain = deps.registry.chainsById.get(execution.chainId);
+      const pollStartedAt = performance.now();
       try {
         const tx = await deps.relayerClient.getTransaction(
           execution.ozRelayerId,
@@ -584,6 +708,17 @@ export async function processRelayerWorkerTick(
         const latest = deps.executions.getByIdOrThrow(execution.id);
         if (latest.state !== projected.state) {
           deps.executions.transitionState(execution.id, projected.state);
+          if (
+            projected.state === "failed" &&
+            projected.error &&
+            projected.error.code === "RELAYER_FAILED"
+          ) {
+            recordActionableFailure(deps.metrics, {
+              chainId: execution.chainId,
+              stage: "worker_poll",
+              code: "RELAYER_FAILED",
+            });
+          }
           deps.executionEvents.append({
             executionId: execution.id,
             type: "state_changed",
@@ -605,6 +740,11 @@ export async function processRelayerWorkerTick(
             deps.ozPollBackoff.until =
               Date.now() + base + Math.floor(Math.random() * 400);
           }
+          recordOperationalRetry(deps.metrics, {
+            chainId: execution.chainId,
+            stage: "worker_poll",
+            reason: "relayer_poll_rate_limited",
+          });
           deps.executionEvents.append({
             executionId: execution.id,
             type: "relayer_poll_rate_limited",
@@ -614,6 +754,11 @@ export async function processRelayerWorkerTick(
           });
           break;
         }
+        recordOperationalRetry(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "worker_poll",
+          reason: "relayer_poll_error",
+        });
         deps.executionEvents.append({
           executionId: execution.id,
           type: "relayer_status_polled",
@@ -621,6 +766,11 @@ export async function processRelayerWorkerTick(
           reason: "Relayer polling error",
           detailsJson: JSON.stringify({}),
         });
+      } finally {
+        deps.metrics?.relayerPollLatency?.observe(
+          { chain_id: String(execution.chainId) },
+          (performance.now() - pollStartedAt) / 1000,
+        );
       }
     }
   }

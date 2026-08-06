@@ -10,6 +10,7 @@ import {
   RelayerTransactionRepository,
 } from "./db/repositories.js";
 import { OzRelayerClient } from "./relayer/client.js";
+import { runRelayerAndAuthorizationTicks } from "./relayer/workerTicks.js";
 import { processRelayerWorkerTick } from "./relayer/worker.js";
 import { processAuthorizationWorkerTick } from "./relayer/authorizationWorker.js";
 import { createApp } from "./app.js";
@@ -26,6 +27,8 @@ import {
 } from "./chain/readiness.js";
 import { createMetrics } from "./metrics/metrics.js";
 import { createSafeClient } from "./safe/client.js";
+import { startReadinessMetricsSampler } from "./metrics/readinessMetricsSampler.js";
+import { startOldestNonterminalAgeSampler } from "./metrics/oldestNonterminalAgeSampler.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -35,7 +38,8 @@ async function main(): Promise<void> {
     runMigrations(db);
   }
 
-  const executions = new RelayExecutionRepository(db);
+  const metrics = createMetrics();
+  const executions = new RelayExecutionRepository(db, metrics);
   const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
   const createRequestAudit = new CreateRequestAuditLogRepository(db);
@@ -43,7 +47,6 @@ async function main(): Promise<void> {
 
   await bindRelayersToRegistry(registry, relayerClient);
 
-  const metrics = createMetrics();
   const ozPollBackoff = { until: 0 };
   const ozRetry = {
     maxAttempts: env.readinessOzRetryMaxAttempts,
@@ -158,6 +161,34 @@ async function main(): Promise<void> {
     );
   }
 
+  if (env.readinessMetricsIntervalMs > 0) {
+    startReadinessMetricsSampler({
+      registry,
+      getChainReadiness: getReadyzChainReadiness,
+      metrics,
+      intervalMs: env.readinessMetricsIntervalMs,
+      logger: app.log,
+    });
+    app.log.info(
+      { intervalMs: env.readinessMetricsIntervalMs },
+      "readiness metrics sampler started",
+    );
+  }
+
+  if (env.oldestNonterminalAgeIntervalMs > 0) {
+    startOldestNonterminalAgeSampler({
+      registry,
+      executions,
+      metrics,
+      intervalMs: env.oldestNonterminalAgeIntervalMs,
+      logger: app.log,
+    });
+    app.log.info(
+      { intervalMs: env.oldestNonterminalAgeIntervalMs },
+      "oldest non-terminal age sampler started",
+    );
+  }
+
   if (env.relayerWorkerEnabled) {
     let tickInFlight = false;
     setInterval(() => {
@@ -165,48 +196,51 @@ async function main(): Promise<void> {
         return;
       }
       tickInFlight = true;
-      const workerPromise = processRelayerWorkerTick({
-        executions,
-        executionEvents,
-        relayerTransactions,
-        relayerClient,
-        registry,
-        batchSize: env.relayerWorkerBatchSize,
-        submitRetryCount: 3,
-        ozPollBackoff,
-      });
-      const authorizationPromise =
-        env.safeAuthorizationEnabled && safeClient
-          ? processAuthorizationWorkerTick({
-              executions,
-              executionEvents,
-              registry,
-              safeClient,
-              batchSize: env.relayerWorkerBatchSize,
-              pollBaseDelayMs: env.safeAuthorizationPollBaseDelayMs,
-              pollMaxDelayMs: env.safeAuthorizationPollMaxDelayMs,
-              metrics,
-              validateRelaySignature: (input) =>
-                validateRelaySignature({
+      void runRelayerAndAuthorizationTicks({
+        processRelayerWorkerTick: () =>
+          processRelayerWorkerTick({
+            executions,
+            executionEvents,
+            relayerTransactions,
+            relayerClient,
+            registry,
+            batchSize: env.relayerWorkerBatchSize,
+            submitRetryCount: 3,
+            ozPollBackoff,
+            metrics,
+          }),
+        ...(env.safeAuthorizationEnabled && safeClient
+          ? {
+              processAuthorizationWorkerTick: () =>
+                processAuthorizationWorkerTick({
+                  executions,
+                  executionEvents,
                   registry,
-                  chainId: input.chainId,
-                  signer: input.signer,
-                  digest: input.digest,
-                  signature: input.signature,
+                  safeClient,
+                  batchSize: env.relayerWorkerBatchSize,
+                  pollBaseDelayMs: env.safeAuthorizationPollBaseDelayMs,
+                  pollMaxDelayMs: env.safeAuthorizationPollMaxDelayMs,
+                  metrics,
+                  validateRelaySignature: (input) =>
+                    validateRelaySignature({
+                      registry,
+                      chainId: input.chainId,
+                      signer: input.signer,
+                      digest: input.digest,
+                      signature: input.signature,
+                    }),
+                  getRelayerSigner: async (ozRelayerId) => {
+                    const relayer = await relayerClient.getRelayer(ozRelayerId);
+                    return relayer.address;
+                  },
                 }),
-              getRelayerSigner: async (ozRelayerId) => {
-                const relayer = await relayerClient.getRelayer(ozRelayerId);
-                return relayer.address;
-              },
-            })
-          : Promise.resolve();
-      Promise.all([authorizationPromise, workerPromise])
-        .catch((error) => {
-          app.log.error({ err: error }, "Relayer worker tick failed");
-        })
-        .finally(() => {
-          tickInFlight = false;
-        });
+            }
+          : {}),
+        metrics,
+        log: app.log,
+      }).finally(() => {
+        tickInFlight = false;
+      });
     }, env.relayerWorkerPollIntervalMs);
   }
 

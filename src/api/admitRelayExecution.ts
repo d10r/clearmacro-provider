@@ -5,6 +5,8 @@ import { decodeClearMacroPayload } from "../validation/clearmacro.js";
 import { assertMacroAllowed } from "../validation/registry.js";
 import type { RelayExecutionRow } from "../db/repositories.js";
 import { projectRelayerState } from "../relayer/mapper.js";
+import { recordActionableFailure } from "../metrics/actionableFailures.js";
+import { isTerminalState } from "../tx/lifecycle.js";
 import {
   getPermit2DomainSeparator,
   getPermit2WitnessStructHash,
@@ -904,32 +906,65 @@ export async function admitRelayExecution(
   };
   const shared = await validateSharedAdmission(admitDeps, body, clientId);
   if ("error" in shared) {
+    recordActionableFailure(deps.metrics, {
+      chainId: body.chainId,
+      stage: "admission",
+      code: shared.error.code,
+    });
     return shared;
   }
+  let result: AdmitRelayExecutionResult;
   if (body.kind === "clearMacroV1") {
-    return admitClearMacroV1(admitDeps, shared);
+    result = await admitClearMacroV1(admitDeps, shared);
+  } else {
+    result = await admitClearMacroPermit2V1(admitDeps, shared);
   }
-  return admitClearMacroPermit2V1(admitDeps, shared);
+  if ("error" in result) {
+    recordActionableFailure(deps.metrics, {
+      chainId: body.chainId,
+      stage: "admission",
+      code: result.error.code,
+    });
+  }
+  return result;
 }
 
 export function finalizeCreatedExecution(
-  deps: Pick<RegisterRoutesDeps, "executions" | "relayerTransactions">,
+  deps: Pick<RegisterRoutesDeps, "executions" | "relayerTransactions" | "metrics">,
   row: RelayExecutionRow,
 ): RelayExecutionRow {
   const relayer = deps.relayerTransactions.getByExecutionId(row.id);
   if (!relayer) {
     return row;
   }
+  // Re-read: worker may have terminalized between admit replay and finalization.
+  const current = deps.executions.getByIdOrThrow(row.id);
+  if (isTerminalState(current.state)) {
+    return current;
+  }
   const projection = projectRelayerState({
     status: relayer.status,
     statusReason: relayer.statusReason,
     hash: relayer.txHash,
     confirmedAt: relayer.confirmedAt,
-    receipt: row.receiptJson ? JSON.parse(row.receiptJson) : null,
-    requiredConfirmations: row.requiredConfirmations,
+    receipt: current.receiptJson ? JSON.parse(current.receiptJson) : null,
+    requiredConfirmations: current.requiredConfirmations,
   });
-  if (projection.state !== row.state) {
-    return deps.executions.transitionState(row.id, projection.state);
+  if (projection.state === current.state) {
+    return current;
   }
-  return row;
+  const updated = deps.executions.transitionState(
+    current.id,
+    projection.state,
+    projection.error ? { errorJson: JSON.stringify(projection.error) } : undefined,
+  );
+  // Duplicate/recovery path can terminalize without the worker poll loop; page the same codes.
+  if (projection.state === "failed" && projection.error?.code === "RELAYER_FAILED") {
+    recordActionableFailure(deps.metrics, {
+      chainId: current.chainId,
+      stage: "worker_poll",
+      code: "RELAYER_FAILED",
+    });
+  }
+  return updated;
 }

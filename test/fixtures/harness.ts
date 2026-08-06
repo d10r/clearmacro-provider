@@ -14,6 +14,7 @@ import {
 } from "../../src/db/repositories.js";
 import type { OzRelayerClient } from "../../src/relayer/client.js";
 import type { AppEnv } from "../../src/config/env.js";
+import { createMetrics, type AppMetrics } from "../../src/metrics/metrics.js";
 
 export type HarnessOverrides = {
   apiAuthEnabled?: boolean;
@@ -37,6 +38,7 @@ export type HarnessOverrides = {
   safeClient?: AppDeps["safeClient"];
   getSignerBytecode?: AppDeps["getSignerBytecode"];
   macroPolicyMode?: "allowlist" | "open";
+  metrics?: AppMetrics;
 };
 
 const defaultPreflightOk: NonNullable<AppDeps["preflightRunMacro"]> = async () => "ok";
@@ -106,7 +108,6 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
   registry.requiredConfirmationsByChainId.set(1, 1);
   const db = openDatabase(join(dir, "app.sqlite"));
   runMigrations(db);
-  const executions = new RelayExecutionRepository(db);
   const executionEvents = new RelayExecutionEventRepository(db);
   const relayerTransactions = new RelayerTransactionRepository(db);
   const createRequestAudit = new CreateRequestAuditLogRepository(db);
@@ -121,6 +122,8 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
 
   const getChainReadiness = overrides?.getChainReadiness ?? (async () => ({ ready: true }));
   const getReadyzChainReadiness = overrides?.getReadyzChainReadiness ?? getChainReadiness;
+  const metrics = overrides?.metrics ?? createMetrics();
+  const executions = new RelayExecutionRepository(db, metrics);
 
   const built = await createApp({
     registry,
@@ -156,10 +159,12 @@ export async function createTestHarness(overrides?: HarnessOverrides) {
     ...(overrides?.getSignerBytecode !== undefined
       ? { getSignerBytecode: overrides.getSignerBytecode }
       : {}),
+    metrics,
   });
   return {
     dir,
     app: built.app,
+    metrics: built.metrics,
     db,
     registry,
     executions,

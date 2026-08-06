@@ -1,6 +1,8 @@
 import { randomUUID, createHash } from "node:crypto";
 import type { DbClient } from "./client.js";
 import { assertTransitionState, isTerminalState, type RelayExecutionState } from "../tx/lifecycle.js";
+import type { AppMetrics } from "../metrics/metrics.js";
+import { recordTerminalTransition } from "../metrics/terminalExecutions.js";
 
 /** Internal placeholder while an OZ submit is in flight; not a real relayer id. */
 export const SUBMISSION_CLAIM_PREFIX = "claim:";
@@ -178,7 +180,10 @@ function nowIso(): string {
 }
 
 export class RelayExecutionRepository {
-  constructor(private readonly client: DbClient) {}
+  constructor(
+    private readonly client: DbClient,
+    private readonly metrics?: Pick<AppMetrics, "executionsTerminalCounter">,
+  ) {}
 
   createPending(input: NewRelayExecution): RelayExecutionRow {
     const timestamp = nowIso();
@@ -391,7 +396,8 @@ export class RelayExecutionRepository {
    * already claimed submission or terminalized the row.
    */
   tryClientCancel(executionId: string, errorJson: string): RelayExecutionRow | null {
-    return this.client.transaction(() => {
+    let shouldRecordTerminal = false;
+    const updated = this.client.transaction(() => {
       const timestamp = nowIso();
       const result = this.client.db
         .prepare(
@@ -407,8 +413,13 @@ export class RelayExecutionRepository {
       if (result.changes === 0) {
         return null;
       }
+      shouldRecordTerminal = true;
       return this.getByIdOrThrow(executionId);
     });
+    if (shouldRecordTerminal && updated) {
+      recordTerminalTransition(this.metrics, updated);
+    }
+    return updated;
   }
 
   /** Claim a pending row immediately before OZ submit so DELETE cannot race it. */
@@ -442,10 +453,23 @@ export class RelayExecutionRepository {
       .run(timestamp, executionId, `${SUBMISSION_CLAIM_PREFIX}%`);
   }
 
+  getOldestNonterminalCreatedAt(chainId: number, state: RelayExecutionState): string | null {
+    const row = this.client.db
+      .prepare(
+        `SELECT MIN(created_at) AS oldest_created_at
+         FROM relay_executions
+         WHERE terminal = 0 AND chain_id = ? AND state = ?`,
+      )
+      .get(chainId, state) as { oldest_created_at: string | null } | undefined;
+    return row?.oldest_created_at ?? null;
+  }
+
   transitionState(executionId: string, toState: RelayExecutionState, options?: { errorJson?: string; ozTransactionId?: string }): RelayExecutionRow {
-    return this.client.transaction(() => {
+    let shouldRecordTerminal = false;
+    const updated = this.client.transaction(() => {
       const existing = this.getByIdOrThrow(executionId);
       assertTransitionState(existing.state, toState);
+      const wasTerminal = isTerminalState(existing.state);
       const terminal = isTerminalState(toState) ? 1 : 0;
       const timestamp = nowIso();
       const terminalAt = terminal ? timestamp : null;
@@ -458,8 +482,15 @@ export class RelayExecutionRepository {
            WHERE id = ?`,
         )
         .run(toState, terminal, timestamp, terminalAt, options?.ozTransactionId ?? null, options?.errorJson ?? null, executionId);
-      return this.getByIdOrThrow(executionId);
+      const next = this.getByIdOrThrow(executionId);
+      shouldRecordTerminal = !wasTerminal && isTerminalState(toState);
+      return next;
     });
+    // Increment only after COMMIT so a rolled-back transition cannot leave a phantom sample.
+    if (shouldRecordTerminal) {
+      recordTerminalTransition(this.metrics, updated);
+    }
+    return updated;
   }
 
   updateMetadata(

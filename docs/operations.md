@@ -110,10 +110,130 @@ The OpenZeppelin Relayer signer must hold native gas on every chain in `config/p
 - **Check balances:** `pnpm run prod:validate` (validates local prod files/env, confirms generated OZ files match `provider.json`, and prints per-chain signer balance from provider RPCs).
 - **Top up:** `pnpm run prod:fund` — per-chain `fundingTxCount` from **30d Superfluid `flowUpdatedEvents`** (subgraph), scaled vs the median chain (`FUNDING_BASE_TX_COUNT`, default `30`). Provider SQLite relay history overrides subgraph when present. Use `SIMULATE=1` first. Flat mode: `TARGET_TX_COUNT=30`. Filters: `CHAIN_IDS`, `TESTNET_ONLY=1`, `MAINNET_ONLY=1`.
 - **Metrics:** on `GET /metrics`, sampled every `RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS` (default 60 minutes; `0` disables):
-  - `clearmacro_relayer_signer_balance_native{chain_id}` — latest native-token balance
-  - `clearmacro_relayer_signer_balance_probe_success{chain_id}` — `1` if the last sample succeeded
-  - `clearmacro_relayer_signer_balance_last_update_timestamp_seconds{chain_id}` — last successful sample time (alert if stale)
+  - `clearmacro_relayer_signer_balance_native{chain_id,network}` — latest native-token balance
+  - `clearmacro_relayer_signer_balance_probe_success{chain_id,network}` — `1` if the last sample succeeded
+  - `clearmacro_relayer_signer_balance_last_update_timestamp_seconds{chain_id,network}` — last successful sample time (alert if stale)
 - **Alerting:** Gate low-balance alerts on `clearmacro_relayer_signer_balance_probe_success == 1` so a failed RPC/OZ sample is not mistaken for an empty wallet. Treat data as stale when `time() - clearmacro_relayer_signer_balance_last_update_timestamp_seconds` exceeds roughly two sample intervals (default ~2 hours at the 60-minute interval). Readiness and relay traffic still catch zero balance on admission; these metrics are for coarse monitoring between samples.
+
+## Actionable failure metrics
+
+The app exposes counters for operator-actionable failures and non-terminal operational retries. These are **not** deployed as Alertmanager rules by default; ops wires them separately.
+
+### Counters
+
+| Metric | Labels | When incremented |
+|--------|--------|------------------|
+| `clearmacro_actionable_failures_total` | `chain_id`, `stage`, `code` | Once per decided actionable failure (admission error, terminal worker/auth outcome, worker tick exception) |
+| `clearmacro_operational_retries_total` | `chain_id`, `stage`, `reason` | When a worker/auth path schedules another retry for an operational stall |
+
+`stage` values: `admission`, `worker_submit`, `worker_poll`, `authorization`, `worker_tick`.
+
+Operational retry `reason` values: `preflight_rpc_unavailable`, `chain_rpc_unavailable`, `relayer_unavailable`, `relayer_poll_error`, `relayer_poll_rate_limited`, `safe_api_retryable`, `unknown`.
+
+Use `chain_id="unknown"` only when no chain context exists (worker tick failures).
+
+### Taxonomy (actionable vs expected)
+
+**Actionable** (increment `clearmacro_actionable_failures_total`):
+
+- Admission: `PROVIDER_NOT_READY`, `RELAYER_UNAVAILABLE`, `CHAIN_UNAVAILABLE`
+- Admission (metered, see catch-all below): `RELAYER_RATE_LIMITED`
+- Worker submit: `RELAYER_SUBMIT_FAILED`, `INTERNAL_INVARIANT`, `INVALID_PERMIT2_STATE`, `CHAIN_NOT_ALLOWED`
+- Worker poll: `RELAYER_FAILED`
+- Authorization: `INVALID_AUTHORIZATION_STATE`, non-retryable Safe infra (e.g. `SAFE_API_UNAUTHORIZED`)
+- Worker tick: `RELAYER_WORKER_TICK_FAILED`, `AUTHORIZATION_WORKER_TICK_FAILED`
+
+**Expected** (do **not** increment): client validation rejects (`SIGNATURE_INVALID`, admission `PREFLIGHT_REVERTED`, policy rejects), ordinary terminal `reverted` (`ONCHAIN_REVERTED`, `RELAYER_REPORTED_REVERT`), `SAFE_AUTHORIZATION_UNSUPPORTED`, duplicate/expired/canceled outcomes.
+
+`RELAYER_RATE_LIMITED` is still metered on the actionable counter for investigation, but **exclude** it from the catch-all alert (use a sustained-threshold rule instead).
+
+### Example PromQL (documented — not deployed until ops adds rules)
+
+```yaml
+# Catch-all actionable failures, excluding rate-limit blips
+- alert: ClearMacroActionableFailure
+  expr: increase(clearmacro_actionable_failures_total{code!="RELAYER_RATE_LIMITED"}[5m]) > 0
+
+# Sustained OZ rate limiting
+- alert: ClearMacroRelayerRateLimited
+  expr: |
+    increase(clearmacro_actionable_failures_total{code="RELAYER_RATE_LIMITED"}[10m]) > 3
+    or increase(clearmacro_operational_retries_total{reason="relayer_poll_rate_limited"}[10m]) > 3
+  for: 5m
+
+# Sustained non-terminal retries
+- alert: ClearMacroOperationalRetries
+  expr: sum by (chain_id, stage, reason) (increase(clearmacro_operational_retries_total[15m])) > 5
+  for: 10m
+```
+
+Process liveness (`up == 0` / scrape failure) remains an infra concern outside these counters.
+
+## Dashboard / golden-signals metrics
+
+Complementary counters and gauges for Grafana traffic, funnel, readiness, and stall visibility. These do **not** replace the actionable-failure paging contract above.
+
+### Metrics
+
+| Metric | Labels | Purpose |
+|--------|--------|---------|
+| `clearmacro_requests_total` | `chain_id`, `kind`, `result` | One increment per schema-valid `POST /v1/relay-executions` handler invocation |
+| `clearmacro_validation_failures_total` | `chain_id`, `code` | Expected client-facing validation codes only |
+| `clearmacro_relayer_submission_total` | `chain_id`, `outcome` | Worker submit funnel: `accepted`, `retry`, `failed` |
+| `clearmacro_relayer_poll_duration_seconds` | `chain_id` | OZ status poll latency histogram |
+| `clearmacro_readiness` | `chain_id`, `reason` | Proactive readiness gauge (`1` when ready with `reason="none"`) |
+| `clearmacro_executions_terminal_total` | `chain_id`, `state`, `code` | Nonterminal→terminal transitions (API + workers) |
+| `clearmacro_oldest_nonterminal_execution_age_seconds` | `chain_id`, `state` | Oldest execution age for `awaiting_authorization`, `pending`, `submitted` |
+
+Request `result` values: `created`, `duplicate`, `rejected_client`, `rejected_provider`, `error`.
+
+Readiness sampler env: `READINESS_METRICS_INTERVAL_MS` (default `30000`, `0` disables). Oldest-age sampler env: `OLDEST_NONTERMINAL_AGE_INTERVAL_MS` (default `30000`, `0` disables). Both run once immediately at startup, sequentially per chain, with no overlapping ticks.
+
+The readiness sampler reuses the cached `GET /readyz` evaluator and **removes stale `{chain_id, reason}` labelsets** before setting the current reason so old not-ready series do not linger.
+
+### Suggested Grafana panels
+
+1. Request rate by `result` / `chain_id`
+2. Admit success ratio: `(created+duplicate) / all requests`
+3. Validation failures by `code`
+4. Actionable failures + operational retries (alerting metrics above)
+5. Submission outcomes by `outcome`
+6. Poll latency p50/p95 by chain: `histogram_quantile(0.95, sum by (chain_id, le) (rate(clearmacro_relayer_poll_duration_seconds_bucket[5m])))`
+7. Readiness by chain: `clearmacro_readiness`
+8. Terminal outcomes by `state`
+9. Oldest non-terminal execution age by `state`
+10. Existing relayer signer balance panels
+
+Example PromQL snippets:
+
+```promql
+# Request rate by result
+sum by (chain_id, result) (rate(clearmacro_requests_total[5m]))
+
+# Admit success ratio
+sum(rate(clearmacro_requests_total{result=~"created|duplicate"}[5m]))
+/
+sum(rate(clearmacro_requests_total[5m]))
+
+# Terminal outcomes
+sum by (chain_id, state) (rate(clearmacro_executions_terminal_total[5m]))
+```
+
+### Soft alerts (ops follow-up — requires readiness stale-series cleanup)
+
+```yaml
+- alert: ClearMacroChainNotReady
+  expr: clearmacro_readiness{reason!="none"} == 0
+  for: 10m
+  labels: { severity: warning }
+
+- alert: ClearMacroExecutionStuck
+  expr: max by (chain_id, state) (clearmacro_oldest_nonterminal_execution_age_seconds) > 1800
+  for: 10m
+  labels: { severity: warning }
+```
+
+Do not page on validation-volume spikes by default.
 
 ## Verification
 

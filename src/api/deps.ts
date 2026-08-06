@@ -13,6 +13,7 @@ import {
   type ClearMacroForwarderPayload,
 } from "../chain/readiness.js";
 import type { RegistryChain } from "../config/schema.js";
+import type { AppMetrics } from "../metrics/metrics.js";
 
 export type RegisterRoutesDeps = {
   registry: LoadedRegistry;
@@ -55,4 +56,5 @@ export type RegisterRoutesDeps = {
   safeAuthorizationEnabled?: boolean;
   safeClient?: import("../safe/client.js").SafeClient;
   getSignerBytecode?: (input: { chainId: number; address: string }) => Promise<string | null>;
+  metrics?: AppMetrics;
 };

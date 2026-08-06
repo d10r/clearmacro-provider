@@ -164,6 +164,7 @@ export async function createApp(deps: AppDeps) {
     ...(deps.getSignerBytecode !== undefined
       ? { getSignerBytecode: deps.getSignerBytecode }
       : {}),
+    metrics,
   });
 
   return { app, metrics };

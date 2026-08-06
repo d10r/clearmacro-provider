@@ -12,6 +12,12 @@ import type { RegistryChain } from "../config/schema.js";
 import type { SafeClient } from "../safe/client.js";
 import { SafeApiError, SafeMessageUnsupportedError } from "../safe/errors.js";
 import { computeAuthorizationPollDelayMs } from "../safe/client.js";
+import {
+  recordActionableFailure,
+  recordOperationalRetry,
+  type ActionableFailureMetrics,
+  type OperationalRetryMetrics,
+} from "../metrics/actionableFailures.js";
 
 type AuthorizationPollOutcome =
   | "promoted"
@@ -40,7 +46,7 @@ export type AuthorizationWorkerDeps = {
         outcome: AuthorizationPollOutcome;
       }): void;
     };
-  };
+  } & Partial<ActionableFailureMetrics & OperationalRetryMetrics>;
   validateRelaySignature: (input: {
     chainId: number;
     signer: string;
@@ -96,6 +102,11 @@ async function tryPromoteExecution(
       signature,
     });
   } catch {
+    recordOperationalRetry(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "authorization",
+      reason: "chain_rpc_unavailable",
+    });
     return {
       outcome: "retry",
       lastErrorJson: JSON.stringify({
@@ -122,6 +133,11 @@ async function tryPromoteExecution(
     msgValue: execution.value,
   });
   if (preflight === "rpc_unavailable") {
+    recordOperationalRetry(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "authorization",
+      reason: "preflight_rpc_unavailable",
+    });
     return {
       outcome: "retry",
       lastErrorJson: JSON.stringify({
@@ -207,6 +223,11 @@ async function processAuthorizationExecution(
         retryable: false,
       }),
     });
+    recordActionableFailure(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "authorization",
+      code: "INVALID_AUTHORIZATION_STATE",
+    });
     return "failed";
   }
 
@@ -214,6 +235,11 @@ async function processAuthorizationExecution(
   try {
     relayerSigner = await deps.getRelayerSigner(execution.ozRelayerId);
   } catch {
+    recordOperationalRetry(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "authorization",
+      reason: "relayer_unavailable",
+    });
     scheduleNextPoll(
       deps,
       execution,
@@ -302,6 +328,11 @@ async function processAuthorizationExecution(
       });
       if (!error.retryable) {
         deps.executions.transitionState(execution.id, "failed", { errorJson });
+        recordActionableFailure(deps.metrics, {
+          chainId: execution.chainId,
+          stage: "authorization",
+          code: error.code,
+        });
         deps.executionEvents.append({
           executionId: execution.id,
           type: "terminal_error_set",
@@ -316,6 +347,11 @@ async function processAuthorizationExecution(
         return "failed";
       }
       scheduleNextPoll(deps, execution, errorJson);
+      recordOperationalRetry(deps.metrics, {
+        chainId: execution.chainId,
+        stage: "authorization",
+        reason: "safe_api_retryable",
+      });
       deps.executionEvents.append({
         executionId: execution.id,
         type: "authorization_poll_retry_scheduled",
@@ -329,6 +365,11 @@ async function processAuthorizationExecution(
       });
       return "retry";
     }
+    recordOperationalRetry(deps.metrics, {
+      chainId: execution.chainId,
+      stage: "authorization",
+      reason: "unknown",
+    });
     scheduleNextPoll(deps, execution);
     return "retry";
   }

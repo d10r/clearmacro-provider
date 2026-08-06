@@ -147,6 +147,10 @@ export function loadEnv() {
     readinessOzRetryBaseDelayMs: parseInteger("READINESS_OZ_RETRY_BASE_DELAY_MS", 100, 1),
     /** Background relayer signer balance sampler interval (0 disables). Default 60 minutes. */
     relayerSignerBalanceSampleIntervalMs: parseRelayerSignerBalanceSampleIntervalMs(),
+    /** Background readiness gauge sampler interval (0 disables). Default 30 seconds. */
+    readinessMetricsIntervalMs: parseSamplerIntervalMs("READINESS_METRICS_INTERVAL_MS", 30_000),
+    /** Background oldest non-terminal execution age sampler interval (0 disables). Default 30 seconds. */
+    oldestNonterminalAgeIntervalMs: parseSamplerIntervalMs("OLDEST_NONTERMINAL_AGE_INTERVAL_MS", 30_000),
     safeAuthorizationEnabled,
     safeApiKey,
     safeApiRetryMaxAttempts: parseInteger("SAFE_API_RETRY_MAX_ATTEMPTS", 3, 1),
@@ -173,6 +177,18 @@ function parseRelayerSignerBalanceSampleIntervalMs(): number {
     throw new Error(
       `Invalid integer env var RELAYER_SIGNER_BALANCE_SAMPLE_INTERVAL_MS: ${value} (minimum 5000 when enabled)`,
     );
+  }
+  return parsed;
+}
+
+function parseSamplerIntervalMs(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid integer env var ${name}: ${value}`);
   }
   return parsed;
 }
