@@ -9,28 +9,28 @@ export function createMetrics() {
   const requestCounter = new Counter({
     name: "clearmacro_requests_total",
     help: "Total relay requests by chain, kind, and result",
-    labelNames: ["chain_id", "kind", "result"] as const,
+    labelNames: ["chain_id", "network", "kind", "result"] as const,
     registers: [registry],
   });
 
   const validationFailureCounter = new Counter({
     name: "clearmacro_validation_failures_total",
     help: "Validation failures by error code",
-    labelNames: ["chain_id", "code"] as const,
+    labelNames: ["chain_id", "network", "code"] as const,
     registers: [registry],
   });
 
   const relayerSubmissionCounter = new Counter({
     name: "clearmacro_relayer_submission_total",
     help: "Relayer submission outcomes",
-    labelNames: ["chain_id", "outcome"] as const,
+    labelNames: ["chain_id", "network", "outcome"] as const,
     registers: [registry],
   });
 
   const relayerPollLatency = new Histogram({
     name: "clearmacro_relayer_poll_duration_seconds",
     help: "Relayer status poll latency",
-    labelNames: ["chain_id"] as const,
+    labelNames: ["chain_id", "network"] as const,
     buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
     registers: [registry],
   });
@@ -38,21 +38,21 @@ export function createMetrics() {
   const readinessGauge = new Gauge({
     name: "clearmacro_readiness",
     help: "Readiness by chain and reason",
-    labelNames: ["chain_id", "reason"] as const,
+    labelNames: ["chain_id", "network", "reason"] as const,
     registers: [registry],
   });
 
   const executionsTerminalCounter = new Counter({
     name: "clearmacro_executions_terminal_total",
     help: "Terminal execution outcomes",
-    labelNames: ["chain_id", "state", "code"] as const,
+    labelNames: ["chain_id", "network", "state", "code"] as const,
     registers: [registry],
   });
 
   const oldestNonterminalExecutionAgeGauge = new Gauge({
     name: "clearmacro_oldest_nonterminal_execution_age_seconds",
     help: "Age in seconds of the oldest non-terminal execution per chain and state",
-    labelNames: ["chain_id", "state"] as const,
+    labelNames: ["chain_id", "network", "state"] as const,
     registers: [registry],
   });
 
@@ -80,21 +80,21 @@ export function createMetrics() {
   const safeAuthorizationPollCounter = new Counter({
     name: "clearmacro_safe_authorization_poll_total",
     help: "Safe authorization poll outcomes",
-    labelNames: ["chain_id", "outcome"] as const,
+    labelNames: ["chain_id", "network", "outcome"] as const,
     registers: [registry],
   });
 
   const actionableFailureCounter = new Counter({
     name: "clearmacro_actionable_failures_total",
     help: "Actionable or unexpected provider failures by chain, stage, and code",
-    labelNames: ["chain_id", "stage", "code"] as const,
+    labelNames: ["chain_id", "network", "stage", "code"] as const,
     registers: [registry],
   });
 
   const operationalRetryCounter = new Counter({
     name: "clearmacro_operational_retries_total",
     help: "Non-terminal operational retries and stalls by chain, stage, and reason",
-    labelNames: ["chain_id", "stage", "reason"] as const,
+    labelNames: ["chain_id", "network", "stage", "reason"] as const,
     registers: [registry],
   });
 
