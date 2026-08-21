@@ -4,7 +4,7 @@ import type { LoadedRegistry } from "../config/registry.js";
 import type { OzRelayerClient } from "../relayer/client.js";
 import type { AppMetrics } from "../metrics/metrics.js";
 import { withRpcFallback } from "./readiness.js";
-import { networkName } from "./protocolMetadata.js";
+import { chainMetricLabels } from "./protocolMetadata.js";
 
 export type RelayerBalanceSamplerMetrics = Pick<
   AppMetrics,
@@ -12,10 +12,6 @@ export type RelayerBalanceSamplerMetrics = Pick<
   | "relayerSignerBalanceProbeSuccess"
   | "relayerSignerBalanceLastUpdateTimestampSeconds"
 >;
-
-function chainLabels(chainId: number): { chain_id: string; network: string } {
-  return { chain_id: String(chainId), network: networkName(chainId) };
-}
 
 /** Samples native balance for each registry chain's bound OZ relayer signer. */
 export async function sampleRelayerSignerBalances(input: {
@@ -26,7 +22,7 @@ export async function sampleRelayerSignerBalances(input: {
 }): Promise<void> {
   for (const chain of input.registry.chainsById.values()) {
     const chainId = chain.chainId;
-    const labels = chainLabels(chainId);
+    const labels = chainMetricLabels(chainId);
     const relayerId = input.registry.relayerIdByChainId.get(chainId);
     if (!relayerId) {
       input.metrics.relayerSignerBalanceProbeSuccess.set(labels, 0);
